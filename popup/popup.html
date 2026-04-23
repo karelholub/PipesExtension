@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Meiro Event Simulator</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup">
+      <header class="header">
+        <div>
+          <h1>Meiro Event Simulator</h1>
+          <p id="tabLabel">Active tab</p>
+        </div>
+        <span id="statusBadge" class="badge">Off</span>
+      </header>
+
+      <section class="summary">
+        <dl>
+          <div>
+            <dt>Mode</dt>
+            <dd id="modeValue">-</dd>
+          </div>
+          <div>
+            <dt>SDK</dt>
+            <dd id="sdkValue">-</dd>
+          </div>
+          <div>
+            <dt>Endpoint</dt>
+            <dd id="endpointValue">-</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="controls">
+        <button id="enableButton" type="button" class="primary">Enable on this tab</button>
+        <button id="disableButton" type="button">Disable</button>
+      </section>
+
+      <section class="custom-event">
+        <label for="customEventName">Custom event</label>
+        <div class="inline">
+          <input id="customEventName" type="text" value="manual_custom_event" spellcheck="false">
+          <button id="customEventButton" type="button">Send</button>
+        </div>
+      </section>
+
+      <nav class="links">
+        <button id="workbenchButton" type="button">Workbench</button>
+        <button id="debugButton" type="button">Debug log</button>
+        <button id="optionsButton" type="button">Options</button>
+      </nav>
+
+      <p id="message" class="message" role="status"></p>
+    </main>
+
+    <script src="../src/shared/constants.js"></script>
+    <script src="../src/shared/browser-utils.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

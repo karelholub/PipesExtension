@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Meiro Event Simulator">
+  <rect width="128" height="128" rx="24" fill="#13251f"/>
+  <path d="M28 82V46c0-7 4-12 11-12h6l19 35 19-35h6c7 0 11 5 11 12v36H82V61L69 85H59L46 61v21H28Z" fill="#e9fff4"/>
+  <circle cx="36" cy="98" r="7" fill="#3ddc97"/>
+  <circle cx="64" cy="98" r="7" fill="#4cc9f0"/>
+  <circle cx="92" cy="98" r="7" fill="#f5c542"/>
+  <path d="M36 98h56" fill="none" stroke="#e9fff4" stroke-width="5" stroke-linecap="round" opacity=".9"/>
+  <circle cx="36" cy="98" r="7" fill="#3ddc97"/>
+  <circle cx="64" cy="98" r="7" fill="#4cc9f0"/>
+  <circle cx="92" cy="98" r="7" fill="#f5c542"/>
+</svg>

@@ -1,0 +1,110 @@
+[
+  {
+    "type": "page_view",
+    "version": "1.2.0",
+    "timestamp": "2026-04-23T10:00:00.000Z",
+    "user_id": "a04b882d-f5a6-42a7-8a17-4b17c7129d48",
+    "session_id": "generated-session-id",
+    "payload": {
+      "page_title": "Example page",
+      "page_url": "https://example.com/products",
+      "page_referrer": null,
+      "custom_payload": {
+        "route_change": false,
+        "app_key": "optional-project-key"
+      }
+    },
+    "client_ids": {
+      "meiro_user_id": "meiro-generated-user-id"
+    },
+    "browser_metrics": {
+      "screen_width": 1440,
+      "screen_height": 900,
+      "viewport_width": 1280,
+      "viewport_height": 720,
+      "language": "en-US",
+      "user_agent": "Example user agent"
+    }
+  },
+  {
+    "type": "click",
+    "version": "1.2.0",
+    "timestamp": "2026-04-23T10:00:01.000Z",
+    "user_id": "a04b882d-f5a6-42a7-8a17-4b17c7129d48",
+    "session_id": "generated-session-id",
+    "payload": {
+      "page_title": "Example page",
+      "page_url": "https://example.com/products",
+      "page_referrer": null,
+      "custom_payload": {
+        "text": "Download brochure",
+        "element_tag": "a",
+        "href": "https://example.com/brochure.pdf",
+        "element_id": "brochure",
+        "element_classes": ["button", "primary"],
+        "selector": "a#brochure",
+        "x": 530,
+        "y": 220,
+        "outbound": false,
+        "file_download": true
+      }
+    },
+    "client_ids": {
+      "meiro_user_id": "meiro-generated-user-id"
+    },
+    "browser_metrics": {
+      "screen_width": 1440,
+      "screen_height": 900,
+      "viewport_width": 1280,
+      "viewport_height": 720,
+      "language": "en-US",
+      "user_agent": "Example user agent"
+    }
+  },
+  {
+    "type": "form_submit",
+    "version": "1.2.0",
+    "timestamp": "2026-04-23T10:00:02.000Z",
+    "user_id": "a04b882d-f5a6-42a7-8a17-4b17c7129d48",
+    "session_id": "generated-session-id",
+    "payload": {
+      "page_title": "Example page",
+      "page_url": "https://example.com/contact",
+      "page_referrer": null,
+      "custom_payload": {
+        "form_action": "https://example.com/contact",
+        "form_method": "post",
+        "form_id": "contact-form",
+        "form_classes": ["lead-form"],
+        "selector": "form#contact-form",
+        "input_fields": [
+          {
+            "tag": "input",
+            "type": "email",
+            "name": "email",
+            "id": "email",
+            "sensitive_excluded": false
+          },
+          {
+            "tag": "input",
+            "type": "password",
+            "name": null,
+            "id": null,
+            "sensitive_excluded": true
+          }
+        ]
+      }
+    },
+    "client_ids": {
+      "meiro_user_id": "meiro-generated-user-id"
+    },
+    "browser_metrics": {
+      "screen_width": 1440,
+      "screen_height": 900,
+      "viewport_width": 1280,
+      "viewport_height": 720,
+      "language": "en-US",
+      "user_agent": "Example user agent"
+    }
+  }
+]

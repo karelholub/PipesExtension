@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Meiro Event Simulator Options</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main class="page">
+      <header>
+        <h1>Meiro Event Simulator</h1>
+        <p>Configure SDK injection and simulated collection for active-tab testing.</p>
+      </header>
+
+      <form id="settingsForm" class="settings">
+        <label>
+          <span>SDK source URL</span>
+          <input id="sdkSourceUrl" name="sdk_source_url" type="url" required>
+        </label>
+
+        <label>
+          <span>Collection endpoint</span>
+          <input id="collectionEndpoint" name="collection_endpoint" type="url" required>
+        </label>
+
+        <label>
+          <span>App or project key</span>
+          <input id="appKey" name="app_key" type="text" autocomplete="off">
+        </label>
+
+        <label>
+          <span>User ID</span>
+          <div class="field-action">
+            <input id="userId" name="user_id" type="text" required autocomplete="off" spellcheck="false">
+            <button id="generateUserIdButton" type="button">Generate</button>
+          </div>
+        </label>
+
+        <label>
+          <span>Mode</span>
+          <select id="mode" name="mode">
+            <option value="inject_sdk">Inject SDK</option>
+            <option value="simulate_only">Simulate only</option>
+            <option value="hybrid">Hybrid</option>
+          </select>
+        </label>
+
+        <div class="toggles">
+          <label><input id="trackingEnabled" name="tracking_enabled" type="checkbox"> Enable tracking globally</label>
+          <label><input id="debug" name="debug" type="checkbox"> Enable debug logging</label>
+          <label><input id="consentOverride" name="consent_override" type="checkbox"> Consent override</label>
+          <label><input id="sendingAllowed" name="sending_allowed" type="checkbox"> Sending allowed when consent override is off</label>
+          <label><input id="captureScrollDepth" name="capture_scroll_depth" type="checkbox"> Capture scroll depth</label>
+          <label><input id="captureOutboundClicks" name="capture_outbound_clicks" type="checkbox"> Mark outbound link clicks</label>
+          <label><input id="captureFileDownloads" name="capture_file_downloads" type="checkbox"> Mark file downloads</label>
+        </div>
+
+        <div class="actions">
+          <button class="primary" type="submit">Save</button>
+          <button id="resetButton" type="button">Reset defaults</button>
+          <button id="workbenchButton" type="button">Open workbench</button>
+          <button id="debugButton" type="button">Open debug log</button>
+        </div>
+
+        <p id="message" role="status"></p>
+      </form>
+    </main>
+
+    <script src="../src/shared/constants.js"></script>
+    <script src="../src/shared/browser-utils.js"></script>
+    <script src="options.js"></script>
+  </body>
+</html>

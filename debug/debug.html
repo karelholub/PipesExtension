@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Meiro Event Simulator Debug Log</title>
+    <link rel="stylesheet" href="debug.css">
+  </head>
+  <body>
+    <main class="page">
+      <header>
+        <div>
+          <h1>Debug log</h1>
+          <p>Rolling list of captured events, validation errors, and transport results.</p>
+        </div>
+        <div class="actions">
+          <button id="refreshButton" type="button">Refresh</button>
+          <button id="workbenchButton" type="button">Workbench</button>
+          <button id="exportButton" type="button">Export JSON</button>
+          <button id="clearButton" type="button">Clear</button>
+        </div>
+      </header>
+
+      <section id="logList" class="log-list" aria-live="polite"></section>
+    </main>
+
+    <script src="debug.js"></script>
+  </body>
+</html>

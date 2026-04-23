@@ -1,0 +1,51 @@
+{
+  "manifest_version": 3,
+  "name": "Meiro Event Simulator",
+  "description": "Developer extension for injecting or simulating Meiro-style web event collection on the active tab.",
+  "version": "1.0.0",
+  "action": {
+    "default_title": "Meiro Event Simulator",
+    "default_icon": {
+      "16": "assets/icon16.png",
+      "32": "assets/icon32.png",
+      "48": "assets/icon48.png",
+      "128": "assets/icon128.png"
+    },
+    "default_popup": "popup/popup.html"
+  },
+  "icons": {
+    "16": "assets/icon16.png",
+    "32": "assets/icon32.png",
+    "48": "assets/icon48.png",
+    "128": "assets/icon128.png"
+  },
+  "options_page": "options/options.html",
+  "devtools_page": "devtools/devtools.html",
+  "background": {
+    "service_worker": "src/background/service-worker.js"
+  },
+  "permissions": [
+    "activeTab",
+    "permissions",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://meiro-internal.eu.pipes.meiro.io/*"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://*/*"
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "src/injected/page-bridge.js"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
+}
