@@ -13,6 +13,7 @@
     mode: "hybrid",
     data_layer_names: ["dataLayer", "digitalData", "utag_data"],
     selector_rules: [],
+    observe_tracking_requests: true,
     capture_scroll_depth: true,
     capture_outbound_clicks: true,
     capture_file_downloads: true
@@ -63,6 +64,69 @@
       id: "default-meiro-internal",
       name: "Meiro internal default",
       settings: DEFAULT_SETTINGS
+    }
+  ]);
+
+  const DEFAULT_RECIPES = Object.freeze([
+    {
+      id: "cta-click",
+      name: "CTA click",
+      description: "Track a prominent call-to-action button or link.",
+      rule: {
+        event_type: "cta_click",
+        name: "CTA click",
+        selector: "",
+        text_contains: "",
+        href_contains: ""
+      }
+    },
+    {
+      id: "outbound-link",
+      name: "Outbound link",
+      description: "Track outbound navigation to another site.",
+      rule: {
+        event_type: "outbound_link_click",
+        name: "Outbound link",
+        selector: "a[href]",
+        text_contains: "",
+        href_contains: "http"
+      }
+    },
+    {
+      id: "file-download",
+      name: "File download",
+      description: "Track document or asset downloads from links.",
+      rule: {
+        event_type: "file_download_click",
+        name: "File download",
+        selector: "a[href]",
+        text_contains: "",
+        href_contains: ".pdf"
+      }
+    },
+    {
+      id: "lead-form",
+      name: "Lead form submit",
+      description: "Track a marketing or contact form submission.",
+      rule: {
+        event_type: "lead_form_submit",
+        name: "Lead form submit",
+        selector: "form",
+        text_contains: "",
+        href_contains: ""
+      }
+    },
+    {
+      id: "newsletter-signup",
+      name: "Newsletter signup",
+      description: "Track newsletter opt-in submits or clicks.",
+      rule: {
+        event_type: "newsletter_signup",
+        name: "Newsletter signup",
+        selector: "",
+        text_contains: "newsletter",
+        href_contains: ""
+      }
     }
   ]);
 
@@ -129,6 +193,7 @@
     DEFAULT_SETTINGS,
     DEFAULT_CONTRACTS,
     DEFAULT_PROFILES,
+    DEFAULT_RECIPES,
     MODES,
     EVENT_VERSION,
     LOG_LIMIT,

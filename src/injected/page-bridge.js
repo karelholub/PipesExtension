@@ -10,7 +10,8 @@
     sdkInjected: false,
     debug: false,
     dataLayerNames: [],
-    watchedDataLayers: new Set()
+    watchedDataLayers: new Set(),
+    requestObserverInstalled: false
   };
 
   function debug(message, details) {
@@ -73,6 +74,145 @@
     }
   }
 
+  function redactText(value) {
+    return String(value || "")
+      .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted:email]")
+      .replace(/\b(?:\d[ -]*?){13,19}\b/g, "[redacted:credit_card]")
+      .replace(/\b(?:bearer|token|secret|apikey|api_key)\b/gi, "[redacted:token]");
+  }
+
+  function isTrackingUrl(url) {
+    return /collect|analytics|gtm|segment|rudder|amplitude|mixpanel|clarity|facebook|doubleclick|meiro|pipes|mparticle|snowplow/i.test(String(url || ""));
+  }
+
+  function bodySummary(body) {
+    if (body === undefined || body === null) {
+      return { bytes: 0, preview: null };
+    }
+
+    if (typeof body === "string") {
+      return { bytes: body.length, preview: redactText(body.slice(0, 300)) };
+    }
+
+    if (body instanceof URLSearchParams) {
+      const text = body.toString();
+      return { bytes: text.length, preview: redactText(text.slice(0, 300)) };
+    }
+
+    if (body instanceof FormData) {
+      const pairs = [];
+      body.forEach((value, key) => {
+        pairs.push(`${key}=${String(value).slice(0, 40)}`);
+      });
+      const text = pairs.join("&");
+      return { bytes: text.length, preview: redactText(text.slice(0, 300)) };
+    }
+
+    if (typeof body === "object") {
+      const text = JSON.stringify(body);
+      return { bytes: text.length, preview: redactText(text.slice(0, 300)) };
+    }
+
+    const fallback = String(body);
+    return { bytes: fallback.length, preview: redactText(fallback.slice(0, 300)) };
+  }
+
+  function dispatchTrackingRequest(detail) {
+    window.dispatchEvent(new CustomEvent("meiro-extension:tracking-request", {
+      detail: Object.assign({ timestamp: new Date().toISOString() }, detail)
+    }));
+  }
+
+  function installRequestObserver() {
+    if (state.requestObserverInstalled) {
+      return;
+    }
+
+    const originalFetch = window.fetch;
+    if (typeof originalFetch === "function") {
+      window.fetch = async function patchedFetch(input, init) {
+        const url = typeof input === "string" ? input : (input && input.url) || "";
+        const method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
+        const requestBody = bodySummary(init && Object.prototype.hasOwnProperty.call(init, "body") ? init.body : (input && input.body));
+        const startedAt = Date.now();
+        try {
+          const response = await originalFetch.apply(this, arguments);
+          if (isTrackingUrl(url)) {
+            const responsePreview = await response.clone().text().then((text) => redactText(text.slice(0, 300))).catch(() => null);
+            dispatchTrackingRequest({
+              transport: "fetch",
+              url,
+              host: (() => { try { return new URL(url, location.href).host; } catch (_error) { return ""; } })(),
+              method,
+              status: response.status,
+              ok: response.ok,
+              duration_ms: Date.now() - startedAt,
+              request_bytes: requestBody.bytes,
+              request_body_preview: requestBody.preview,
+              response_preview: responsePreview
+            });
+          }
+          return response;
+        } catch (error) {
+          if (isTrackingUrl(url)) {
+            dispatchTrackingRequest({
+              transport: "fetch",
+              url,
+              host: (() => { try { return new URL(url, location.href).host; } catch (_error) { return ""; } })(),
+              method,
+              status: null,
+              ok: false,
+              duration_ms: Date.now() - startedAt,
+              request_bytes: requestBody.bytes,
+              request_body_preview: requestBody.preview,
+              response_preview: error && error.message ? error.message : "fetch error"
+            });
+          }
+          throw error;
+        }
+      };
+    }
+
+    const originalOpen = XMLHttpRequest.prototype.open;
+    const originalSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.open = function patchedOpen(method, url) {
+      this.__meiroTrackingRequest = {
+        method: String(method || "GET").toUpperCase(),
+        url: String(url || ""),
+        startedAt: 0
+      };
+      return originalOpen.apply(this, arguments);
+    };
+    XMLHttpRequest.prototype.send = function patchedSend(body) {
+      const metadata = this.__meiroTrackingRequest || { method: "GET", url: "" };
+      const summary = bodySummary(body);
+      if (!isTrackingUrl(metadata.url)) {
+        return originalSend.apply(this, arguments);
+      }
+
+      metadata.startedAt = Date.now();
+      this.addEventListener("loadend", () => {
+        dispatchTrackingRequest({
+          transport: "xhr",
+          url: metadata.url,
+          host: (() => { try { return new URL(metadata.url, location.href).host; } catch (_error) { return ""; } })(),
+          method: metadata.method,
+          status: this.status || null,
+          ok: this.status >= 200 && this.status < 400,
+          duration_ms: Date.now() - metadata.startedAt,
+          request_bytes: summary.bytes,
+          request_body_preview: summary.preview,
+          response_preview: redactText(String(this.responseText || "").slice(0, 300))
+        });
+      }, { once: true });
+
+      return originalSend.apply(this, arguments);
+    };
+
+    state.requestObserverInstalled = true;
+    debug("Tracking request observer installed");
+  }
+
   function inspectDataLayer(name) {
     const value = window[name];
     const isArray = Array.isArray(value);
@@ -86,13 +226,22 @@
   }
 
   function collectDiagnostics() {
-    const globalNames = ["MeiroEvents", "Meiro", "meiro", "meirompt", "MEIRO"];
-    const sdkGlobals = globalNames.map((name) => {
+    const sdkNames = ["MeiroEvents", "Meiro", "meiro", "meirompt", "MEIRO"];
+    const trackerNames = ["dataLayer", "gtag", "ga", "fbq", "mixpanel", "amplitude", "analytics", "rudderanalytics", "heap", "clarity"];
+    const sdkGlobals = sdkNames.map((name) => {
       const value = window[name];
       return {
         name,
         exists: value !== undefined,
         has_track: Boolean(value && typeof value.track === "function"),
+        type: value === undefined ? "undefined" : typeof value
+      };
+    });
+    const trackerGlobals = trackerNames.map((name) => {
+      const value = window[name];
+      return {
+        name,
+        exists: value !== undefined,
         type: value === undefined ? "undefined" : typeof value
       };
     });
@@ -112,9 +261,16 @@
       sdk_source_url: state.sdkSourceUrl,
       sdk_injected_by_extension: state.sdkInjected,
       sdk_globals: sdkGlobals,
+      tracker_globals: trackerGlobals,
       sdk_scripts: sdkScripts,
       data_layers: state.dataLayerNames.map(inspectDataLayer),
-      csp_meta: cspMeta
+      csp_meta: cspMeta,
+      consent_apis: {
+        tcfapi: typeof window.__tcfapi === "function",
+        onetrust: Boolean(window.OneTrust),
+        cookiebot: Boolean(window.Cookiebot),
+        didomi: Boolean(window.Didomi)
+      }
     };
   }
 
@@ -195,6 +351,9 @@
     state.debug = Boolean(detail.debug);
     state.dataLayerNames = Array.isArray(detail.dataLayerNames) ? detail.dataLayerNames : [];
     watchDataLayers(state.dataLayerNames);
+    if (detail.observeTrackingRequests !== false) {
+      installRequestObserver();
+    }
     if (detail.injectSdk && detail.sdkSourceUrl) {
       injectSdk(detail.sdkSourceUrl);
     }

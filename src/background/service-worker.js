@@ -66,6 +66,8 @@ async function handleMessage(message, sender) {
       return createProfile(message.name);
     case "APPLY_PROFILE":
       return applyProfile(message.profileId);
+    case "APPLY_RECIPE":
+      return applyRecipe(message.recipeId, message.selection);
     case "REPLAY_EVENT":
       return replayEvent(message.payload);
     case "START_PICKER":
@@ -229,7 +231,7 @@ async function collectEvent(payload, sender) {
   }
 
   const result = await postEvent(settings, payload);
-  await appendLog(logEntry(tabId, payload, settings.collection_endpoint, result.ok, result.status, result.error, validationErrors, piiFindings));
+  await appendLog(logEntry(tabId, payload, settings.collection_endpoint, result.ok, result.status, result.error, validationErrors, piiFindings, false, result.transport));
   return result;
 }
 
@@ -243,6 +245,7 @@ async function postEvent(settings, payload) {
   // Meiro/Pipes deployments may require a different envelope or auth scheme.
   // Keep this isolated so collector-specific transport can be swapped later.
   for (let attempt = 0; attempt < 2; attempt += 1) {
+    const startedAt = Date.now();
     try {
       const response = await fetch(settings.collection_endpoint, {
         method: "POST",
@@ -251,13 +254,31 @@ async function postEvent(settings, payload) {
         credentials: "omit",
         cache: "no-store"
       });
+      const responsePreview = await readResponsePreview(response.clone());
 
       if (response.ok || attempt === 1 || response.status < 500) {
-        return { ok: response.ok, status: response.status };
+        return {
+          ok: response.ok,
+          status: response.status,
+          transport: {
+            latency_ms: Date.now() - startedAt,
+            request_bytes: body.length,
+            response_preview: responsePreview
+          }
+        };
       }
     } catch (error) {
       if (attempt === 1) {
-        return { ok: false, status: null, error: error.message || String(error) };
+        return {
+          ok: false,
+          status: null,
+          error: error.message || String(error),
+          transport: {
+            latency_ms: Date.now() - startedAt,
+            request_bytes: body.length,
+            response_preview: null
+          }
+        };
       }
     }
 
@@ -269,6 +290,15 @@ async function postEvent(settings, payload) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function readResponsePreview(response) {
+  try {
+    const text = await response.text();
+    return text ? text.slice(0, 300) : null;
+  } catch (_error) {
+    return null;
+  }
 }
 
 async function hasEndpointPermission(endpoint) {
@@ -298,7 +328,7 @@ async function requestEndpointPermission(endpoint) {
   return { ok: granted, pattern, error: granted ? null : "Endpoint permission was not granted." };
 }
 
-function logEntry(tabId, payload, endpoint, ok, status, error, validationErrors, piiFindings, replayed) {
+function logEntry(tabId, payload, endpoint, ok, status, error, validationErrors, piiFindings, replayed, transport) {
   return {
     id: shared.uuid(),
     tabId,
@@ -311,7 +341,8 @@ function logEntry(tabId, payload, endpoint, ok, status, error, validationErrors,
     error: error || null,
     validation_errors: validationErrors || [],
     pii_findings: piiFindings || [],
-    replayed: Boolean(replayed)
+    replayed: Boolean(replayed),
+    transport: transport || null
   };
 }
 
@@ -371,15 +402,25 @@ async function getWorkbenchState(tabId) {
     }
   }
 
+  const scopedLogs = tabId ? logs.filter((entry) => entry.tabId === tabId || entry.tabId === null) : logs;
+  const enrichedLogs = scopedLogs.map((entry) => Object.assign({}, entry, {
+    validation_summary: shared.summarizeValidationEntry(entry)
+  }));
+
   return {
     ok: true,
     settings,
-    logs,
+    logs: enrichedLogs,
     contracts,
+    recipes: shared.DEFAULT_RECIPES,
     profiles,
     status: status.status,
     page,
-    readiness: shared.summarizeReadiness({ settings, logs, page })
+    readiness: shared.summarizeReadiness({ settings, logs: scopedLogs, page }),
+    event_catalog: shared.buildEventCatalog(scopedLogs),
+    delivery_summary: shared.buildDeliverySummary(scopedLogs),
+    source_coverage: shared.buildSourceCoverage(page),
+    timeline: shared.buildTimeline(scopedLogs, page, settings)
   };
 }
 
@@ -464,8 +505,30 @@ async function replayEvent(payload) {
   }
 
   const result = await postEvent(settings, eventPayload);
-  await appendLog(logEntry(null, eventPayload, settings.collection_endpoint, result.ok, result.status, result.error, validationErrors, piiFindings, true));
+  await appendLog(logEntry(null, eventPayload, settings.collection_endpoint, result.ok, result.status, result.error, validationErrors, piiFindings, true, result.transport));
   return result;
+}
+
+async function applyRecipe(recipeId, selection) {
+  const recipe = shared.DEFAULT_RECIPES.find((item) => item.id === recipeId);
+  if (!recipe) {
+    throw new Error("Recipe not found.");
+  }
+
+  const settings = await getSettings();
+  const selected = selection || {};
+  const rule = {
+    id: shared.uuid(),
+    name: selected.text ? `${recipe.rule.name}: ${String(selected.text).slice(0, 40)}` : recipe.rule.name,
+    event_type: recipe.rule.event_type,
+    selector: selected.selector || recipe.rule.selector,
+    text_contains: recipe.rule.text_contains || "",
+    href_contains: recipe.rule.href_contains || (selected.href ? String(selected.href).slice(0, 300) : ""),
+    enabled: true
+  };
+
+  const nextRules = (settings.selector_rules || []).concat(rule);
+  return saveSelectorRules(nextRules);
 }
 
 async function startPicker(tabId) {

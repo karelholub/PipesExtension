@@ -12,6 +12,7 @@
     scrollDepthsSent: new Set(),
     routeTimer: null,
     dataLayerPushes: [],
+    requestSignals: [],
     pickerSelection: null,
     pickerCleanup: null
   };
@@ -80,6 +81,7 @@
     state.started_at = new Date().toISOString();
     state.scrollDepthsSent = new Set();
     state.dataLayerPushes = [];
+    state.requestSignals = [];
 
     installPageBridge(configurePageBridge);
     setTimeout(configurePageBridge, 100);
@@ -137,7 +139,8 @@
         debug: state.settings.debug,
         injectSdk,
         sdkSourceUrl: state.settings.sdk_source_url,
-        dataLayerNames: state.settings.data_layer_names || []
+        dataLayerNames: state.settings.data_layer_names || [],
+        observeTrackingRequests: state.settings.observe_tracking_requests !== false
       }
     }));
   }
@@ -222,17 +225,25 @@
       shared.debugLog(state.settings, "Data layer push", event.detail);
     };
 
+    const onTrackingRequest = (event) => {
+      state.requestSignals.unshift(event.detail);
+      state.requestSignals = state.requestSignals.slice(0, 120);
+      shared.debugLog(state.settings, "Tracking request", event.detail);
+    };
+
     document.addEventListener("click", onClick, true);
     document.addEventListener("submit", onSubmit, true);
     root.addEventListener("meiro-extension:route-change", onRouteChange);
     root.addEventListener("scroll", onScroll, { passive: true });
     root.addEventListener("meiro-extension:datalayer-push", onDataLayerPush);
+    root.addEventListener("meiro-extension:tracking-request", onTrackingRequest);
 
     state.cleanup.push(() => document.removeEventListener("click", onClick, true));
     state.cleanup.push(() => document.removeEventListener("submit", onSubmit, true));
     state.cleanup.push(() => root.removeEventListener("meiro-extension:route-change", onRouteChange));
     state.cleanup.push(() => root.removeEventListener("scroll", onScroll));
     state.cleanup.push(() => root.removeEventListener("meiro-extension:datalayer-push", onDataLayerPush));
+    state.cleanup.push(() => root.removeEventListener("meiro-extension:tracking-request", onTrackingRequest));
   }
 
   function evaluateSelectorRules(element, event) {
@@ -322,6 +333,56 @@
         href: shared.nearestHref(element)
       }));
 
+    const localStorageEntries = readStorage(root.localStorage);
+    const sessionStorageEntries = readStorage(root.sessionStorage);
+    const cookies = document.cookie
+      .split(";")
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 60)
+      .map((item) => {
+        const parts = item.split("=");
+        const name = parts.shift() || "";
+        const value = parts.join("=");
+        return {
+          name,
+          value_preview: shared.redactPotentialPii ? shared.redactPotentialPii(String(value).slice(0, 80)) : String(value).slice(0, 80)
+        };
+      });
+
+    const queryParams = Array.from(new URLSearchParams(location.search).entries()).map(([key, value]) => ({
+      key,
+      value: shared.redactPotentialPii ? shared.redactPotentialPii(value) : value
+    }));
+
+    const metaTags = Array.from(document.querySelectorAll("meta[name], meta[property]"))
+      .slice(0, 60)
+      .map((meta) => ({
+        name: meta.getAttribute("name") || meta.getAttribute("property"),
+        content: (meta.getAttribute("content") || "").slice(0, 180)
+      }));
+
+    const networkResources = performance.getEntriesByType("resource")
+      .filter((entry) => /collect|analytics|gtm|segment|rudder|amplitude|mixpanel|clarity|facebook|doubleclick|meiro|pipes/i.test(entry.name))
+      .slice(-80)
+      .map((entry) => ({
+        name: entry.name,
+        host: safeHost(entry.name),
+        initiatorType: entry.initiatorType || null,
+        duration: entry.duration || 0,
+        transferSize: entry.transferSize || 0,
+        timestamp: new Date(performance.timeOrigin + entry.startTime).toISOString()
+      }));
+
+    const consent = {
+      has_tcfapi: typeof root.__tcfapi === "function",
+      has_onetrust: Boolean(root.OneTrust),
+      has_cookiebot: Boolean(root.Cookiebot),
+      has_didomi: Boolean(root.Didomi),
+      consent_like_cookies: cookies.filter((item) => /consent|cookie|optanon|euconsent/i.test(item.name)).map((item) => item.name),
+      consent_like_storage_keys: localStorageEntries.concat(sessionStorageEntries).filter((item) => /consent|cookie|optanon|euconsent/i.test(item.key)).map((item) => item.key)
+    };
+
     return {
       ok: true,
       active: state.active,
@@ -331,9 +392,43 @@
       forms,
       interactive,
       data_layer_pushes: state.dataLayerPushes,
+      request_signals: state.requestSignals,
       picker_selection: state.pickerSelection,
-      sdk_diagnostics: diagnostics
+      sdk_diagnostics: diagnostics,
+      sources: {
+        query_params: queryParams,
+        cookies,
+        local_storage: localStorageEntries,
+        session_storage: sessionStorageEntries,
+        meta_tags: metaTags,
+        network_resources: networkResources,
+        tracking_requests: state.requestSignals,
+        consent
+      }
     };
+  }
+
+  function readStorage(storage) {
+    try {
+      return Array.from({ length: Math.min(storage.length, 60) }, (_value, index) => {
+        const key = storage.key(index);
+        const value = key ? storage.getItem(key) : "";
+        return {
+          key,
+          value_preview: shared.redactPotentialPii ? shared.redactPotentialPii(String(value || "").slice(0, 140)) : String(value || "").slice(0, 140)
+        };
+      }).filter((item) => item.key);
+    } catch (_error) {
+      return [];
+    }
+  }
+
+  function safeHost(value) {
+    try {
+      return new URL(value, location.href).host;
+    } catch (_error) {
+      return "";
+    }
   }
 
   function requestPageDiagnostics() {

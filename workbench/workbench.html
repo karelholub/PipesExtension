@@ -7,94 +7,253 @@
     <link rel="stylesheet" href="workbench.css">
   </head>
   <body>
-    <main class="page">
-      <header class="hero">
-        <div>
-          <h1>Meiro Event Workbench</h1>
-          <p id="pageContext">Inspect SDK setup, data layers, DOM mappings, and event delivery.</p>
+    <main id="appShell" class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-row">
+            <h1>Meiro Workbench</h1>
+            <button id="sidebarToggle" class="sidebar-toggle" type="button" title="Collapse sidebar" aria-label="Collapse sidebar">Collapse</button>
+          </div>
+          <p>DevTools-first operator surface for event collection, CDP signals, and router delivery.</p>
         </div>
-        <div class="actions">
-          <button id="refreshButton" type="button">Refresh</button>
-          <button id="enableButton" type="button">Enable tab</button>
-          <button id="exportSetupButton" type="button">Export setup</button>
-        </div>
-      </header>
 
-      <nav class="tabs" aria-label="Workbench sections">
-        <button data-tab="readiness" class="active" type="button">Readiness</button>
-        <button data-tab="events" type="button">Events</button>
-        <button data-tab="sdk" type="button">SDK</button>
-        <button data-tab="datalayer" type="button">Data layer</button>
-        <button data-tab="mapper" type="button">DOM mapper</button>
-        <button data-tab="contracts" type="button">Contracts</button>
-      </nav>
+        <nav class="nav" aria-label="Workflow navigation">
+          <button data-view="overview" class="active" type="button" title="Overview"><span class="button-short">Ovr</span><span class="button-label">Overview</span></button>
+          <button data-view="signals" type="button" title="Signals"><span class="button-short">Sig</span><span class="button-label">Signals</span></button>
+          <button data-view="builder" type="button" title="Event Builder"><span class="button-short">Map</span><span class="button-label">Event Builder</span></button>
+          <button data-view="validation" type="button" title="Validation"><span class="button-short">Val</span><span class="button-label">Validation</span></button>
+          <button data-view="delivery" type="button" title="Delivery"><span class="button-short">Net</span><span class="button-label">Delivery</span></button>
+          <button data-view="profiles" type="button" title="Profiles"><span class="button-short">Cfg</span><span class="button-label">Profiles</span></button>
+        </nav>
 
-      <section id="readiness" class="panel active">
-        <div id="readinessList" class="check-grid"></div>
-      </section>
+        <section class="sidebar-box">
+          <h2>Tab status</h2>
+          <div id="statusPills" class="pill-row"></div>
+          <p id="pageContext" class="context">Waiting for inspected page.</p>
+        </section>
 
-      <section id="events" class="panel">
-        <div class="panel-header">
-          <h2>Event inspector</h2>
-          <button id="clearLogsButton" type="button">Clear logs</button>
-        </div>
-        <div id="eventList" class="event-list"></div>
-      </section>
+        <section class="sidebar-box">
+          <h2>Actions</h2>
+          <div class="stack-actions">
+            <button id="refreshButton" type="button" title="Refresh"><span class="button-short">Ref</span><span class="button-label">Refresh</span></button>
+            <button id="enableButton" class="primary" type="button" title="Enable live collection"><span class="button-short">On</span><span class="button-label">Enable live collection</span></button>
+            <button id="disableButton" type="button" title="Disable tab"><span class="button-short">Off</span><span class="button-label">Disable tab</span></button>
+            <button id="exportSetupButton" type="button" title="Export setup"><span class="button-short">Exp</span><span class="button-label">Export setup</span></button>
+          </div>
+        </section>
 
-      <section id="sdk" class="panel">
-        <div id="sdkDiagnostics" class="grid-two"></div>
-      </section>
+        <p id="message" role="status"></p>
+      </aside>
 
-      <section id="datalayer" class="panel">
-        <div class="panel-header">
-          <h2>Data layer inspector</h2>
-          <button id="saveDataLayersButton" type="button">Save names</button>
-        </div>
-        <label class="stack">
-          <span>Globals to inspect</span>
-          <input id="dataLayerNames" type="text" spellcheck="false">
-        </label>
-        <div id="dataLayerOutput" class="grid-two"></div>
-      </section>
-
-      <section id="mapper" class="panel">
-        <div class="panel-header">
-          <h2>DOM event mapper</h2>
-          <button id="pickerButton" type="button">Pick element</button>
-        </div>
-        <div id="pickerOutput" class="notice"></div>
-        <form id="ruleForm" class="rule-form">
-          <label><span>Name</span><input id="ruleName" type="text" placeholder="CTA click"></label>
-          <label><span>Event type</span><input id="ruleEventType" type="text" value="cta_click"></label>
-          <label><span>CSS selector</span><input id="ruleSelector" type="text" spellcheck="false"></label>
-          <label><span>Text contains</span><input id="ruleText" type="text"></label>
-          <label><span>Href contains</span><input id="ruleHref" type="text"></label>
-          <button class="primary" type="submit">Save rule</button>
-        </form>
-        <div id="rulesList" class="rule-list"></div>
-      </section>
-
-      <section id="contracts" class="panel">
-        <div class="grid-two">
-          <section class="box">
-            <div class="panel-header">
-              <h2>Payload contracts</h2>
-              <button id="saveContractsButton" type="button">Save contracts</button>
+      <section class="content">
+        <section id="overview" class="view active">
+          <header class="view-header">
+            <div>
+              <h2>Overview</h2>
+              <p>One timeline for page signals, captured events, and delivery outcomes.</p>
             </div>
-            <textarea id="contractsEditor" spellcheck="false"></textarea>
+          </header>
+          <div id="overviewSummary" class="summary-grid"></div>
+          <div class="split">
+            <section class="card">
+              <div class="card-header">
+                <h3>Readiness</h3>
+              </div>
+              <div id="readinessList" class="stack"></div>
+            </section>
+            <section class="card">
+              <div class="card-header">
+                <h3>Source coverage</h3>
+              </div>
+              <div id="sourceCoverage" class="stack"></div>
+            </section>
+          </div>
+          <section class="card">
+            <div class="card-header">
+              <h3>Live timeline</h3>
+              <div class="filters">
+                <input id="timelineSearch" type="search" placeholder="Filter timeline">
+                <select id="timelineKind">
+                  <option value="all">All signals</option>
+                  <option value="event">Events</option>
+                  <option value="tracking_request">Tracking requests</option>
+                  <option value="data_layer_push">Data layer pushes</option>
+                  <option value="page_view">Page views</option>
+                </select>
+              </div>
+            </div>
+            <div id="timelineList" class="timeline"></div>
           </section>
-          <section class="box">
-            <div class="panel-header">
+        </section>
+
+        <section id="signals" class="view">
+          <header class="view-header">
+            <div>
+              <h2>Signals</h2>
+              <p>Inspect data layer, storage, cookies, query params, globals, consent, and tracking-related resources.</p>
+            </div>
+          </header>
+          <section class="card">
+            <div class="card-header">
+              <h3>Observed data layers</h3>
+              <button id="saveDataLayersButton" type="button">Save names</button>
+            </div>
+            <label class="field">
+              <span>Globals to inspect</span>
+              <input id="dataLayerNames" type="text" spellcheck="false">
+            </label>
+          </section>
+          <div id="signalsGrid" class="grid"></div>
+        </section>
+
+        <section id="builder" class="view">
+          <header class="view-header">
+            <div>
+              <h2>Event Builder</h2>
+              <p>Pick DOM elements, create mapping rules, and inspect forms and interactive elements.</p>
+            </div>
+            <button id="pickerButton" type="button">Pick element</button>
+          </header>
+          <div id="pickerOutput" class="card notice"></div>
+          <section class="card">
+            <div class="card-header">
+              <h3>Create rule</h3>
+            </div>
+            <form id="ruleForm" class="rule-form">
+              <label class="field"><span>Name</span><input id="ruleName" type="text" placeholder="CTA click"></label>
+              <label class="field"><span>Event type</span><input id="ruleEventType" type="text" value="cta_click"></label>
+              <label class="field"><span>CSS selector</span><input id="ruleSelector" type="text" spellcheck="false"></label>
+              <label class="field"><span>Text contains</span><input id="ruleText" type="text"></label>
+              <label class="field"><span>Href contains</span><input id="ruleHref" type="text"></label>
+              <button class="primary" type="submit">Save rule</button>
+            </form>
+          </section>
+          <div class="split">
+            <section class="card">
+              <div class="card-header">
+                <h3>Selector rules</h3>
+              </div>
+              <div id="rulesList" class="stack"></div>
+            </section>
+            <section class="card">
+              <div class="card-header">
+                <h3>Recipes</h3>
+              </div>
+              <div id="recipeList" class="stack"></div>
+            </section>
+          </div>
+          <div class="split">
+            <section class="card">
+              <div class="card-header">
+                <h3>Detected forms</h3>
+              </div>
+              <div id="formsList" class="stack"></div>
+            </section>
+          </div>
+          <section class="card">
+            <div class="card-header">
+              <h3>Interactive elements</h3>
+            </div>
+            <div id="interactiveList" class="stack"></div>
+          </section>
+        </section>
+
+        <section id="validation" class="view">
+          <header class="view-header">
+            <div>
+              <h2>Validation</h2>
+              <p>Review event quality, contract failures, and PII warnings with concrete fix suggestions.</p>
+            </div>
+          </header>
+          <div id="eventCatalog" class="summary-grid"></div>
+          <section class="card">
+            <div class="card-header">
+              <h3>Validation queue</h3>
+              <div class="filters">
+                <input id="validationSearch" type="search" placeholder="Filter events">
+                <select id="validationStatus">
+                  <option value="all">All outcomes</option>
+                  <option value="pass">Ready</option>
+                  <option value="warn">Warnings</option>
+                  <option value="fail">Failures</option>
+                </select>
+              </div>
+            </div>
+            <div id="validationList" class="stack"></div>
+          </section>
+          <section class="card">
+            <div class="card-header">
+              <h3>Compare events</h3>
+            </div>
+            <div class="rule-form">
+              <label class="field">
+                <span>Left event</span>
+                <select id="diffLeft"></select>
+              </label>
+              <label class="field">
+                <span>Right event</span>
+                <select id="diffRight"></select>
+              </label>
+            </div>
+            <div id="diffSummary" class="notice"></div>
+            <div id="diffList" class="stack"></div>
+          </section>
+        </section>
+
+        <section id="delivery" class="view">
+          <header class="view-header">
+            <div>
+              <h2>Delivery</h2>
+              <p>Inspect endpoint outcomes, replay payloads, and compare router-bound sends with nearby page signals.</p>
+            </div>
+            <button id="clearLogsButton" type="button">Clear logs</button>
+          </header>
+          <div id="deliverySummary" class="summary-grid"></div>
+          <section class="card">
+            <div class="card-header">
+              <h3>Delivery log</h3>
+              <div class="filters">
+                <input id="deliverySearch" type="search" placeholder="Filter delivery log">
+                <select id="deliveryStatus">
+                  <option value="all">All sends</option>
+                  <option value="sent">Successful</option>
+                  <option value="issue">Issues</option>
+                </select>
+              </div>
+            </div>
+            <div id="deliveryList" class="stack"></div>
+          </section>
+        </section>
+
+        <section id="profiles" class="view">
+          <header class="view-header">
+            <div>
               <h2>Profiles</h2>
-              <button id="createProfileButton" type="button">Save current</button>
+              <p>Manage environment settings and payload contracts used by the workbench.</p>
             </div>
-            <input id="profileName" type="text" placeholder="Profile name">
-            <div id="profilesList" class="profile-list"></div>
-          </section>
-        </div>
+          </header>
+          <div class="split">
+            <section class="card">
+              <div class="card-header">
+                <h3>Payload contracts</h3>
+                <button id="saveContractsButton" type="button">Save contracts</button>
+              </div>
+              <textarea id="contractsEditor" spellcheck="false"></textarea>
+            </section>
+            <section class="card">
+              <div class="card-header">
+                <h3>Environment profiles</h3>
+                <button id="createProfileButton" type="button">Save current</button>
+              </div>
+              <label class="field">
+                <span>Profile name</span>
+                <input id="profileName" type="text" placeholder="Staging / production / client demo">
+              </label>
+              <div id="profilesList" class="stack"></div>
+            </section>
+          </div>
+        </section>
       </section>
-
-      <p id="message" role="status"></p>
     </main>
 
     <script src="../src/shared/constants.js"></script>

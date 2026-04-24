@@ -109,21 +109,39 @@ When debug mode is enabled, useful messages are also printed to the page console
 
 ## Admin Workbench
 
-Open **Workbench** from the popup after selecting a website tab. The workbench is designed for admins setting up event collection into Meiro/Pipes Event Router.
+The workbench is now organized around operator workflows instead of technical tabs. It is designed for admins and implementers working with event collection, data layer mapping, behavioral tracking, and CDP-oriented signal inspection.
+
+Primary workflow areas:
+
+- **Overview**: readiness checks, source coverage, and a mixed live timeline combining data layer pushes, captured events, and tracking-related network resources
+- **Signals**: data layer, cookies, query params, local/session storage, meta tags, tracker globals, consent hints, tracking-related resource inspection, and live tracking-request observation
+- **Event Builder**: element picker, selector rule creation, detected forms, and interactive DOM elements
+- **Validation**: event catalog, contract failures, PII warnings, fix suggestions, and event diffing
+- **Delivery**: endpoint outcomes, replay, transport latency/size hints, and tab-scoped delivery logs
+- **Profiles**: environment profiles and payload contract editing
 
 It includes:
 
+- DevTools panel and Elements sidebar support for inspect-first workflows
+- Persistent workbench UI state, so the active view, sidebar mode, and operator filters survive reloads
+- Collapsible rail mode for narrow DevTools layouts, so the panel stays usable without horizontal scrolling
+- Tab-scoped logs, so the workbench focuses on the currently inspected site instead of mixing unrelated tabs
+- Live refresh while the workbench is open
 - Readiness checklist for tracking state, endpoint, user ID, SDK URL, SDK detection, data layers, page views, and successful endpoint responses
+- Source coverage summary across data layers, storage, cookies, globals, meta tags, and tracking-related resources
+- Live observation of tracking-like `fetch` and `XMLHttpRequest` calls from the inspected page, with method, status, duration, request size, and sanitized request/response previews
 - Event inspector with payload validation, PII warnings, copy, and replay
-- SDK setup diagnostics for matching script tags, likely Meiro globals, injected SDK state, and CSP meta tags
+- SDK setup diagnostics for matching script tags, likely Meiro globals, injected SDK state, consent APIs, and CSP meta tags
 - Data layer inspector for `dataLayer`, `digitalData`, `utag_data`, or custom global names
 - Data layer push history captured after tracking is enabled
 - DOM element picker that creates selector-based mapping rules
+- Built-in mapping recipes for common tracking patterns such as CTA clicks, outbound links, file downloads, lead forms, and newsletter signups
 - Selector robustness warnings for brittle selectors
+- Event diffing to compare two captured payloads path-by-path inside the workbench
+- Timeline, validation, and delivery filters for narrowing the live stream to the event types or issue classes you are actively debugging
 - Payload contract editor for required paths per event type
 - Environment profiles for saving and applying SDK/endpoint/user/rule configurations
 - Setup export as JSON for handoff to implementation teams
-- DevTools panel and Elements sidebar support for inspect-first workflows
 
 Selector rules run on click events. A matching rule emits the configured custom event type with selector, text, href, coordinates, tag, id, and classes.
 
