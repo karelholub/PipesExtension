@@ -358,6 +358,20 @@ pre {
   background: #f8fafc;
 }
 
+.item-body .card {
+  padding: 10px;
+  background: #f8fafc;
+}
+
+.item-body .card pre {
+  max-height: 220px;
+}
+
+.action-result {
+  border-color: #b8cfe6;
+  background: #f4f9fd;
+}
+
 .item-title {
   font-weight: 800;
   overflow-wrap: anywhere;

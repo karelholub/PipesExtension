@@ -55,6 +55,7 @@
     sourceTestSummary: document.getElementById("sourceTestSummary"),
     sourceTestPayload: document.getElementById("sourceTestPayload"),
     sourceTestHeaders: document.getElementById("sourceTestHeaders"),
+    sourceTestInspector: document.getElementById("sourceTestInspector"),
     sourceTestResult: document.getElementById("sourceTestResult"),
     runSourceTestButton: document.getElementById("runSourceTestButton"),
     pipesEventTypes: document.getElementById("pipesEventTypes"),
@@ -69,6 +70,7 @@
   let pollTimer = null;
   let selectedDiffLeftId = null;
   let selectedDiffRightId = null;
+  let lastDetailInteractionAt = 0;
   const uiState = loadUiState();
   const sourceTestState = {
     payload: "",
@@ -80,6 +82,7 @@
     trackingRulesCode: "",
     sourceFunctionCode: ""
   };
+  const pipesActionResults = new Map();
 
   window.addEventListener("unhandledrejection", (event) => {
     if (handlePossibleContextInvalidation(event.reason)) {
@@ -137,6 +140,8 @@
   bindFilterInput(els.validationStatus, "validation", "status");
   bindFilterInput(els.deliverySearch, "delivery", "search");
   bindFilterInput(els.deliveryStatus, "delivery", "status");
+  document.addEventListener("scroll", markDetailInteraction, true);
+  document.addEventListener("pointerdown", markDetailInteraction, true);
 
   safeStartup();
 
@@ -167,7 +172,7 @@
       applyUiState();
       await load();
       pollTimer = setInterval(() => {
-        if (!document.hidden) {
+        if (!document.hidden && !isDetailInteractionActive()) {
           safeAction(load)();
         }
       }, 1500);
@@ -193,6 +198,7 @@
       return;
     }
 
+    const scrollState = captureDetailScrollState();
     renderHeader();
     renderOverview();
     renderSignals();
@@ -200,6 +206,7 @@
     renderValidation();
     renderDelivery();
     renderProfiles();
+    restoreDetailScrollState(scrollState);
   }
 
   function renderHeader() {
@@ -617,12 +624,14 @@
   function validationCard(entry) {
     const article = document.createElement("article");
     article.className = "item";
+    article.dataset.detailKey = `validation:${entry.id || entry.event_type || ""}`;
     const summary = entry.validation_summary || shared.summarizeValidationEntry(entry);
     article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="item-body"></div>`;
     article.querySelector(".item-title").textContent = entry.event_type;
     article.querySelector(".item-meta").textContent = `${entry.timestamp} · ${entry.payload && entry.payload.payload ? entry.payload.payload.page_url || "" : ""}`;
     article.querySelector(".inline-buttons").appendChild(pill(summary.label, summary.severity === "pass" ? "good" : (summary.severity === "warn" ? "warn" : "bad")));
     const body = article.querySelector(".item-body");
+    const actionResultKey = pipesActionKey(entry);
 
     if (summary.validation_errors.length) {
       body.appendChild(subtleBox(`Validation: ${summary.validation_errors.join(" ")}`));
@@ -656,16 +665,24 @@
     verifyButton.textContent = "Verify in Pipes";
     verifyButton.disabled = !canSyncPipesEventType(entry);
     verifyButton.addEventListener("click", safeAction(async () => {
+      setPipesActionResult(actionResultKey, { status: "pending", label: "Verifying captured payload in Pipes." });
+      renderValidation();
       const response = await runtimeMessage({
         type: "VERIFY_PRISM_EVENT_PAYLOAD",
         payload: entry.payload
       });
       if (response.ok) {
+        setPipesActionResult(actionResultKey, {
+          status: response.verification && response.verification.ok ? "ok" : "error",
+          label: pipesVerificationMessage(response.verification),
+          detail: response.verification || null
+        });
         setMessage(pipesVerificationMessage(response.verification));
-        body.appendChild(compactJsonCard("Router validation", response.verification));
       } else {
+        setPipesActionResult(actionResultKey, { status: "error", label: response.error });
         setMessage(response.error, true);
       }
+      renderValidation();
     }));
     actions.append(replayButton, copyButton, verifyButton);
     if (canSyncPipesEventType(entry)) {
@@ -673,6 +690,8 @@
       syncButton.type = "button";
       syncButton.textContent = pipesEventTypeExists(entry.event_type) ? "Sync Pipes definition" : "Define in Pipes";
       syncButton.addEventListener("click", safeAction(async () => {
+        setPipesActionResult(actionResultKey, { status: "pending", label: "Syncing Pipes definition and verifying source output." });
+        renderValidation();
         const response = await runtimeMessage({
           type: "SYNC_PRISM_EVENT_TYPE_FROM_EVENT",
           eventType: entry.event_type,
@@ -680,8 +699,18 @@
           verify: true
         });
         if (response.ok) {
+          setPipesActionResult(actionResultKey, {
+            status: response.verification && response.verification.ok ? "ok" : "error",
+            label: `${pipesSyncMessage(entry.event_type, response)} ${pipesVerificationMessage(response.verification)}`,
+            detail: {
+              action: response.action,
+              inferred: response.inferred,
+              verification: response.verification || null
+            }
+          });
           setMessage(`${pipesSyncMessage(entry.event_type, response)} ${pipesVerificationMessage(response.verification)}`);
         } else {
+          setPipesActionResult(actionResultKey, { status: "error", label: response.error });
           setMessage(response.error, true);
         }
         await load();
@@ -693,12 +722,14 @@
     const pre = document.createElement("pre");
     pre.textContent = JSON.stringify(shared.redactPotentialPii(entry.payload), null, 2);
     body.appendChild(pre);
+    appendPipesActionResult(body, actionResultKey);
     return article;
   }
 
   function deliveryCard(entry) {
     const article = document.createElement("article");
     article.className = "item";
+    article.dataset.detailKey = `delivery:${entry.id || entry.event_type || ""}`;
     article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="item-body"></div>`;
     article.querySelector(".item-title").textContent = `${entry.event_type} -> ${entry.endpoint || "endpoint"}`;
     article.querySelector(".item-meta").textContent = `${entry.timestamp} · ${entry.ok ? "success" : "issue"}${entry.status ? ` · HTTP ${entry.status}` : ""}`;
@@ -727,6 +758,7 @@
   function pipesSetupCard(item) {
     const article = document.createElement("article");
     article.className = "item";
+    article.dataset.detailKey = `pipes-setup:${item.event_type}`;
     article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="item-body"></div>`;
     article.querySelector(".item-title").textContent = item.event_type;
     article.querySelector(".item-meta").textContent = `${item.count} captured · ${item.fail_count} issue(s) · last seen ${item.last_seen_at || "n/a"}`;
@@ -736,6 +768,7 @@
     }
 
     const body = article.querySelector(".item-body");
+    const actionResultKey = pipesActionKey(item.sample || item.event_type);
     const fields = document.createElement("div");
     fields.className = "kv";
     fields.appendChild(kvBox("Pipes Event Type", item.exists ? "exists" : "missing"));
@@ -750,6 +783,8 @@
     syncButton.textContent = item.exists ? "Sync definition" : "Create definition";
     syncButton.disabled = !item.sample || !canSyncPipesEventType(item.sample);
     syncButton.addEventListener("click", safeAction(async () => {
+      setPipesActionResult(actionResultKey, { status: "pending", label: "Syncing Pipes definition and verifying source output." });
+      renderValidation();
       const response = await runtimeMessage({
         type: "SYNC_PRISM_EVENT_TYPE_FROM_EVENT",
         eventType: item.event_type,
@@ -757,18 +792,94 @@
         verify: true
       });
       if (response.ok) {
+        setPipesActionResult(actionResultKey, {
+          status: response.verification && response.verification.ok ? "ok" : "error",
+          label: `${pipesSyncMessage(item.event_type, response)} ${pipesVerificationMessage(response.verification)}`,
+          detail: {
+            action: response.action,
+            inferred: response.inferred,
+            verification: response.verification || null
+          }
+        });
         setMessage(`${pipesSyncMessage(item.event_type, response)} ${pipesVerificationMessage(response.verification)}`);
-        if (response.verification) {
-          body.appendChild(compactJsonCard("Router validation", response.verification));
-        }
       } else {
+        setPipesActionResult(actionResultKey, { status: "error", label: response.error });
         setMessage(response.error, true);
       }
       await load();
     }));
     actions.appendChild(syncButton);
     body.appendChild(actions);
+    appendPipesActionResult(body, actionResultKey);
     return article;
+  }
+
+  function sourceTestSummaryCard(summary) {
+    const article = document.createElement("article");
+    article.className = "item";
+    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="kv"></div>`;
+    article.querySelector(".item-title").textContent = summary.ok ? "Source test passed" : "Source test needs attention";
+    article.querySelector(".item-meta").textContent = `${summary.event_count} emitted event(s) · ${summary.valid_event_count} valid · ${summary.identifier_count} identifier(s)`;
+    article.querySelector(".inline-buttons").appendChild(pill(summary.ok ? "PASS" : "CHECK", summary.ok ? "good" : "bad"));
+    const fields = article.querySelector(".kv");
+    fields.appendChild(kvBox("Events", summary.event_types.join(", ") || "none"));
+    fields.appendChild(kvBox("Identifiers", String(summary.identifier_count)));
+    fields.appendChild(kvBox("Errors", String(summary.errors.length)));
+    return article;
+  }
+
+  function sourceTestEventCard(event, index, validation) {
+    const result = sourceTestEventResult(index, validation);
+    const article = document.createElement("article");
+    article.className = "item";
+    article.dataset.detailKey = `source-test-event:${index}`;
+    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="item-body"></div>`;
+    const eventType = event && (event.event_type || event.type) ? (event.event_type || event.type) : (result && result.eventType) || `event ${index + 1}`;
+    article.querySelector(".item-title").textContent = eventType;
+    article.querySelector(".item-meta").textContent = `Output event ${index + 1}`;
+    article.querySelector(".inline-buttons").appendChild(pill(result && result.ok === false ? "FAIL" : "READY", result && result.ok === false ? "bad" : "good"));
+    const body = article.querySelector(".item-body");
+    const fields = document.createElement("div");
+    fields.className = "kv";
+    fields.appendChild(kvBox("Identifier count", result && Array.isArray(result.identifiers) ? result.identifiers.length : 0));
+    fields.appendChild(kvBox("Errors", result && Array.isArray(result.errors) ? result.errors.length : 0));
+    body.appendChild(fields);
+    if (result && Array.isArray(result.identifiers) && result.identifiers.length) {
+      body.appendChild(compactJsonCard("Identifiers", result.identifiers));
+    }
+    if (result && Array.isArray(result.errors) && result.errors.length) {
+      body.appendChild(compactJsonCard("Errors", result.errors));
+    }
+    body.appendChild(compactJsonCard("Event payload", event));
+    return article;
+  }
+
+  function sourceTestEventResult(index, validation) {
+    const results = validation && Array.isArray(validation.eventResults) ? validation.eventResults : [];
+    return results.find((item) => item.index === index) || results[index] || null;
+  }
+
+  function summarizeSourceTestResult(result) {
+    const validation = result && result.validation ? result.validation : {};
+    const eventResults = Array.isArray(validation.eventResults) ? validation.eventResults : [];
+    const errors = [];
+    if (Array.isArray(validation.errors)) {
+      errors.push(...validation.errors.map((item) => String(item)));
+    }
+    eventResults.forEach((item) => {
+      if (Array.isArray(item.errors) && item.errors.length) {
+        errors.push(...item.errors.map((error) => `event ${item.index}: ${String(error)}`));
+      }
+    });
+    const events = Array.isArray(result && result.events) ? result.events : [];
+    return {
+      ok: Boolean(result && result.ok && validation.ok !== false && errors.length === 0),
+      event_count: events.length || eventResults.length,
+      valid_event_count: eventResults.filter((item) => item.ok !== false).length || (events.length && !errors.length ? events.length : 0),
+      event_types: eventResults.map((item) => item.eventType).filter(Boolean),
+      identifier_count: eventResults.reduce((count, item) => count + (Array.isArray(item.identifiers) ? item.identifiers.length : 0), 0),
+      errors
+    };
   }
 
   function buildPipesSetupQueue() {
@@ -853,6 +964,8 @@
     const actions = article.querySelector(".inline-buttons");
 
     const nameField = fieldWithInput("Name", "text", eventType.name);
+    nameField.input.readOnly = true;
+    nameField.input.title = "Pipes does not allow renaming existing Event Types.";
     const schemaField = fieldWithTextarea("JSON Schema", eventType.jsonSchema === null ? "null" : JSON.stringify(eventType.jsonSchema, null, 2), true);
     const rulesField = fieldWithTextarea("Identifier rules", JSON.stringify((eventType.identifierRules || []).map((rule) => ({
       identifierTypeId: rule.identifierTypeId,
@@ -900,12 +1013,11 @@
           type: "UPDATE_PRISM_EVENT_TYPE",
           eventTypeId: eventType.id,
           updates: {
-            name: nameField.input.value.trim(),
-            jsonSchema: parseNullableJson(schemaField.input.value),
+            jsonSchema: normalizeJsonSchemaTypes(parseNullableJson(schemaField.input.value)),
             identifierRules: parseIdentifierRules(rulesField.input.value)
           }
         });
-        setMessage(response.ok ? `Saved Event Type '${nameField.input.value.trim()}'.` : response.error, !response.ok);
+        setMessage(response.ok ? `Saved Event Type '${eventType.name}'.` : response.error, !response.ok);
         await load();
       } catch (error) {
         setMessage(error.message || String(error), true);
@@ -994,9 +1106,33 @@
     if (document.activeElement !== els.sourceTestHeaders) {
       els.sourceTestHeaders.value = sourceTestState.headers || "{\n  \n}";
     }
+    renderSourceTestInspector();
     els.sourceTestResult.textContent = sourceTestState.result
       ? JSON.stringify(sourceTestState.result, null, 2)
       : "Run the current source transform against a recent payload example.";
+  }
+
+  function renderSourceTestInspector() {
+    if (!sourceTestState.result) {
+      renderStack(els.sourceTestInspector, [], "Run a source transform test to inspect emitted events, identifiers, validation errors, and transform logs.");
+      return;
+    }
+
+    const result = sourceTestState.result;
+    const summary = summarizeSourceTestResult(result);
+    const nodes = [
+      sourceTestSummaryCard(summary)
+    ];
+    if (Array.isArray(result.events) && result.events.length) {
+      nodes.push(...result.events.map((event, index) => sourceTestEventCard(event, index, result.validation)));
+    }
+    if (summary.errors.length) {
+      nodes.push(compactJsonCard("Validation errors", summary.errors));
+    }
+    if (Array.isArray(result.logs) && result.logs.length) {
+      nodes.push(compactJsonCard("Transform logs", result.logs));
+    }
+    renderStack(els.sourceTestInspector, nodes);
   }
 
   function renderPipesEventTypes() {
@@ -1093,7 +1229,7 @@
   function previewEventTypeConfig(eventType, schemaText, rulesText, target) {
     target.textContent = "";
     try {
-      const schema = parseNullableJson(schemaText);
+      const schema = normalizeJsonSchemaTypes(parseNullableJson(schemaText));
       const rules = parseIdentifierRulesPreview(rulesText);
       const sample = samplePayloadForEventType(eventType.name);
       if (!sample) {
@@ -1340,7 +1476,7 @@
     if (Array.isArray(value)) {
       const firstDefined = value.find((item) => item !== undefined);
       return {
-        type: "ARRAY",
+        type: "array",
         items: firstDefined === undefined ? {} : inferJsonSchemaFromSample(firstDefined)
       };
     }
@@ -1350,20 +1486,48 @@
         properties[key] = inferJsonSchemaFromSample(childValue);
       });
       return {
-        type: "OBJECT",
+        type: "object",
         properties
       };
     }
     if (typeof value === "number") {
-      return { type: Number.isInteger(value) ? "INTEGER" : "NUMBER" };
+      return { type: Number.isInteger(value) ? "integer" : "number" };
     }
     if (typeof value === "boolean") {
-      return { type: "BOOLEAN" };
+      return { type: "boolean" };
     }
     if (value === null) {
-      return { type: "NULL" };
+      return { type: "null" };
     }
-    return { type: "STRING" };
+    return { type: "string" };
+  }
+
+  function normalizeJsonSchemaTypes(schema) {
+    if (schema === null || schema === undefined) {
+      return schema;
+    }
+    if (Array.isArray(schema)) {
+      return schema.map(normalizeJsonSchemaTypes);
+    }
+    if (!schema || typeof schema !== "object") {
+      return schema;
+    }
+    const normalized = {};
+    Object.entries(schema).forEach(([key, value]) => {
+      normalized[key] = key === "type" ? normalizeJsonSchemaTypeValue(value) : normalizeJsonSchemaTypes(value);
+    });
+    return normalized;
+  }
+
+  function normalizeJsonSchemaTypeValue(value) {
+    if (Array.isArray(value)) {
+      return value.map(normalizeJsonSchemaTypeValue);
+    }
+    if (!value) {
+      return value;
+    }
+    const type = String(value).toLowerCase();
+    return ["integer", "number", "string", "boolean", "object", "array", "null"].includes(type) ? type : value;
   }
 
   function summaryPreviewCard(title, nodes) {
@@ -1402,6 +1566,7 @@
   function jsonCard(title, value) {
     const article = document.createElement("article");
     article.className = "card";
+    article.dataset.detailKey = `json:${title}`;
     article.innerHTML = `<div class="card-header"><h3></h3></div><pre></pre>`;
     article.querySelector("h3").textContent = title;
     article.querySelector("pre").textContent = JSON.stringify(value, null, 2);
@@ -1476,6 +1641,59 @@
     box.className = "subtle-box";
     box.textContent = text;
     return box;
+  }
+
+  function markDetailInteraction(event) {
+    const target = event && event.target;
+    if (target && target.closest && target.closest("pre, textarea, .item, .card")) {
+      lastDetailInteractionAt = Date.now();
+    }
+  }
+
+  function isDetailInteractionActive() {
+    return Date.now() - lastDetailInteractionAt < 4000;
+  }
+
+  function captureDetailScrollState() {
+    const stateByKey = {};
+    document.querySelectorAll("[data-detail-key]").forEach((node) => {
+      const key = node.dataset.detailKey;
+      if (!key) {
+        return;
+      }
+      const scrollables = [node].concat(Array.from(node.querySelectorAll("pre, textarea")));
+      scrollables.forEach((scrollable, index) => {
+        if (scrollable.scrollTop || scrollable.scrollLeft) {
+          stateByKey[`${key}:${index}`] = {
+            top: scrollable.scrollTop,
+            left: scrollable.scrollLeft
+          };
+        }
+      });
+    });
+    return stateByKey;
+  }
+
+  function restoreDetailScrollState(stateByKey) {
+    if (!stateByKey || !Object.keys(stateByKey).length) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      document.querySelectorAll("[data-detail-key]").forEach((node) => {
+        const key = node.dataset.detailKey;
+        if (!key) {
+          return;
+        }
+        const scrollables = [node].concat(Array.from(node.querySelectorAll("pre, textarea")));
+        scrollables.forEach((scrollable, index) => {
+          const saved = stateByKey[`${key}:${index}`];
+          if (saved) {
+            scrollable.scrollTop = saved.top;
+            scrollable.scrollLeft = saved.left;
+          }
+        });
+      });
+    });
   }
 
   function emptyState(text) {
@@ -1642,6 +1860,36 @@
       return `Updated '${eventType}' on ${sourceName}. Added inferred schema/rules where they were missing.`;
     }
     return `'${eventType}' already matches the captured event setup on ${sourceName}.`;
+  }
+
+  function pipesActionKey(value) {
+    if (value && typeof value === "object") {
+      return value.id || `${value.event_type || "event"}::${value.timestamp || ""}`;
+    }
+    return String(value || "event");
+  }
+
+  function setPipesActionResult(key, result) {
+    pipesActionResults.set(key, Object.assign({ updated_at: new Date().toISOString() }, result));
+  }
+
+  function appendPipesActionResult(target, key) {
+    const result = pipesActionResults.get(key);
+    if (!result) {
+      return;
+    }
+    const article = document.createElement("article");
+    article.className = "item action-result";
+    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="item-body"></div>`;
+    article.querySelector(".item-title").textContent = result.status === "pending" ? "Pipes action running" : "Pipes action result";
+    article.querySelector(".item-meta").textContent = result.updated_at || "";
+    article.querySelector(".inline-buttons").appendChild(pill(result.status === "ok" ? "PASS" : (result.status === "pending" ? "RUNNING" : "CHECK"), result.status === "ok" ? "good" : (result.status === "pending" ? "warn" : "bad")));
+    const body = article.querySelector(".item-body");
+    body.appendChild(subtleBox(result.label || "No result details."));
+    if (result.detail) {
+      body.appendChild(compactJsonCard("Details", result.detail));
+    }
+    target.appendChild(article);
   }
 
   function pipesVerificationMessage(verification) {

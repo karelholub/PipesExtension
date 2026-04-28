@@ -721,10 +721,12 @@ async function syncPrismEventTypeFromEvent(eventType, payload, verify) {
   }
 
   const mergedRules = mergeIdentifierRules(existing.identifierRules || [], inferredRules);
-  const hasSchema = existing.jsonSchema !== null && existing.jsonSchema !== undefined;
+  const normalizedExistingSchema = normalizeJsonSchemaTypes(existing.jsonSchema);
+  const hasSchema = normalizedExistingSchema !== null && normalizedExistingSchema !== undefined;
   const changedRules = mergedRules.length !== (existing.identifierRules || []).length;
   const shouldUpdateSchema = !hasSchema && Boolean(inferredSchema);
-  if (!changedRules && !shouldUpdateSchema) {
+  const changedSchemaTypes = JSON.stringify(normalizedExistingSchema) !== JSON.stringify(existing.jsonSchema);
+  if (!changedRules && !shouldUpdateSchema && !changedSchemaTypes) {
     const result = {
       ok: true,
       action: "unchanged",
@@ -739,8 +741,7 @@ async function syncPrismEventTypeFromEvent(eventType, payload, verify) {
   }
 
   const body = normalizePrismEventTypePayload(existing, {
-    name: existing.name,
-    jsonSchema: shouldUpdateSchema ? inferredSchema : existing.jsonSchema,
+    jsonSchema: shouldUpdateSchema ? inferredSchema : normalizedExistingSchema,
     identifierRules: mergedRules
   });
   const updated = await prismApiRequest(connection, pipes.base_url, `/api/event-streams/${pipes.source.id}/event-types/${existing.id}`, {
@@ -754,7 +755,7 @@ async function syncPrismEventTypeFromEvent(eventType, payload, verify) {
     event_type: updated,
     source: pipes.source,
     inferred: {
-      schema: shouldUpdateSchema,
+      schema: shouldUpdateSchema || changedSchemaTypes,
       identifier_rules: inferredRules.length
     }
   };
@@ -1125,11 +1126,46 @@ function inferEventTypeJsonSchema(payload) {
   return inferJsonSchemaFromSample(sample);
 }
 
+function normalizeJsonSchemaTypes(schema) {
+  if (schema === null || schema === undefined) {
+    return schema;
+  }
+  if (Array.isArray(schema)) {
+    return schema.map(normalizeJsonSchemaTypes);
+  }
+  if (!schema || typeof schema !== "object") {
+    return schema;
+  }
+
+  const normalized = {};
+  Object.entries(schema).forEach(([key, value]) => {
+    if (key === "type") {
+      normalized[key] = normalizeJsonSchemaTypeValue(value);
+      return;
+    }
+    normalized[key] = normalizeJsonSchemaTypes(value);
+  });
+  return normalized;
+}
+
+function normalizeJsonSchemaTypeValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(normalizeJsonSchemaTypeValue);
+  }
+  if (!value) {
+    return value;
+  }
+  const type = String(value).toLowerCase();
+  return type === "integer" || type === "number" || type === "string" || type === "boolean" || type === "object" || type === "array" || type === "null"
+    ? type
+    : value;
+}
+
 function inferJsonSchemaFromSample(value) {
   if (Array.isArray(value)) {
     const firstDefined = value.find((item) => item !== undefined);
     return {
-      type: "ARRAY",
+      type: "array",
       items: firstDefined === undefined ? {} : inferJsonSchemaFromSample(firstDefined)
     };
   }
@@ -1139,20 +1175,20 @@ function inferJsonSchemaFromSample(value) {
       properties[key] = inferJsonSchemaFromSample(childValue);
     });
     return {
-      type: "OBJECT",
+      type: "object",
       properties
     };
   }
   if (typeof value === "number") {
-    return { type: Number.isInteger(value) ? "INTEGER" : "NUMBER" };
+    return { type: Number.isInteger(value) ? "integer" : "number" };
   }
   if (typeof value === "boolean") {
-    return { type: "BOOLEAN" };
+    return { type: "boolean" };
   }
   if (value === null) {
-    return { type: "NULL" };
+    return { type: "null" };
   }
-  return { type: "STRING" };
+  return { type: "string" };
 }
 
 function normalizePrismEventTypePayload(existing, updates) {
@@ -1169,10 +1205,9 @@ function normalizePrismEventTypePayload(existing, updates) {
     }));
 
   return {
-    name: String((updates && updates.name) || existing.name || "").trim(),
-    jsonSchema: updates && Object.prototype.hasOwnProperty.call(updates, "jsonSchema")
+    jsonSchema: normalizeJsonSchemaTypes(updates && Object.prototype.hasOwnProperty.call(updates, "jsonSchema")
       ? updates.jsonSchema
-      : (existing.jsonSchema === undefined ? null : existing.jsonSchema),
+      : (existing.jsonSchema === undefined ? null : existing.jsonSchema)),
     identifierRules: normalizedRules
   };
 }

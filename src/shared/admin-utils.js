@@ -5,11 +5,14 @@
 
   const PII_PATTERNS = Object.freeze([
     { type: "email", pattern: /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i },
-    { type: "phone", pattern: /(?:\+?\d[\d .()-]{7,}\d)/ },
     { type: "credit_card", pattern: /\b(?:\d[ -]*?){13,19}\b/ },
     { type: "ssn", pattern: /\b\d{3}-\d{2}-\d{4}\b/ },
     { type: "token", pattern: /\b(?:bearer|token|secret|apikey|api_key)\b/i }
   ]);
+  const PHONE_PATTERN = /(?:\+?\d[\d .()-]{7,}\d)/;
+  const ISO_TIMESTAMP_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z?$/i;
+  const TECHNICAL_PATH_PATTERN = /\.(?:timestamp|time|date|created_at|updated_at|received_at|last_seen_at|page_url|href|url|referrer|selector)$/i;
+  const PHONE_PATH_PATTERN = /(?:^|\.)(?:phone|tel|telephone|mobile|msisdn)(?:$|[._-])/i;
 
   function getByPath(object, path) {
     return String(path || "").split(".").reduce((value, key) => {
@@ -51,6 +54,9 @@
           nextFindings.push({ type: item.type, path });
         }
       });
+      if (isLikelyPhoneValue(value, path)) {
+        nextFindings.push({ type: "phone", path });
+      }
       return nextFindings;
     }
 
@@ -92,9 +98,11 @@
     };
   }
 
-  function redactPotentialPii(value) {
+  function redactPotentialPii(value, basePath) {
+    const path = basePath || "$";
     if (typeof value === "string") {
-      return PII_PATTERNS.reduce((text, item) => text.replace(item.pattern, `[redacted:${item.type}]`), value);
+      const redacted = PII_PATTERNS.reduce((text, item) => text.replace(item.pattern, `[redacted:${item.type}]`), value);
+      return isLikelyPhoneValue(redacted, path) ? redacted.replace(PHONE_PATTERN, "[redacted:phone]") : redacted;
     }
 
     if (!value || typeof value !== "object") {
@@ -102,10 +110,26 @@
     }
 
     if (Array.isArray(value)) {
-      return value.map(redactPotentialPii);
+      return value.map((entry, index) => redactPotentialPii(entry, `${path}[${index}]`));
     }
 
-    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, redactPotentialPii(entry)]));
+    return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, redactPotentialPii(entry, `${path}.${key}`)]));
+  }
+
+  function isLikelyPhoneValue(value, path) {
+    const text = String(value || "").trim();
+    if (!text || ISO_TIMESTAMP_PATTERN.test(text) || TECHNICAL_PATH_PATTERN.test(path || "")) {
+      return false;
+    }
+    const match = text.match(PHONE_PATTERN);
+    if (!match) {
+      return false;
+    }
+    const digits = match[0].replace(/\D/g, "");
+    if (digits.length < 8 || digits.length > 15) {
+      return false;
+    }
+    return PHONE_PATH_PATTERN.test(path || "") || /[+(). -]/.test(match[0]);
   }
 
   function summarizeReadiness(state) {

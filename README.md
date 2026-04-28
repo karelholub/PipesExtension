@@ -143,6 +143,7 @@ It includes:
 - One-click JSON Schema inference for Event Types from source-test output or recent captured payloads
 - Identifier-rule builder that uses Pipes identifier types and payload-path suggestions so admins can add rules without hand-writing JSON
 - Source transform test harness that runs the current source function against recent example payloads from Pipes
+- Structured source test inspector with emitted events, identifier extraction, validation errors, transform logs, and raw JSON output
 - Tracking rules editor for the resolved source, including generation from local selector rules and saving to Pipes
 - Source transform editor for updating the resolved source function after testing changes
 - SDK setup diagnostics for matching script tags, likely Meiro globals, injected SDK state, consent APIs, and CSP meta tags
