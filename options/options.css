@@ -46,6 +46,7 @@ label {
 
 input[type="url"],
 input[type="text"],
+input[type="password"],
 select {
   min-height: 40px;
   border: 1px solid #b7c3cf;

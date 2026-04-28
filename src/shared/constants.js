@@ -144,7 +144,8 @@
     LOGS: "meiro_tracker_logs",
     CONTRACTS: "meiro_tracker_contracts",
     PROFILES: "meiro_tracker_profiles",
-    ENABLED_TABS: "meiro_tracker_enabled_tabs"
+    ENABLED_TABS: "meiro_tracker_enabled_tabs",
+    PRISM_CONNECTION: "meiro_tracker_prism_connection"
   });
 
   const SENSITIVE_FIELD_PATTERNS = Object.freeze([

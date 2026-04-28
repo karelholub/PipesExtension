@@ -138,6 +138,9 @@
   function deriveFixSuggestions(entry) {
     const suggestions = [];
     const errors = entry && entry.validation_errors ? entry.validation_errors : [];
+    const semanticErrors = entry && entry.transport && Array.isArray(entry.transport.semantic_errors)
+      ? entry.transport.semantic_errors
+      : [];
     if (errors.some((item) => /user_id/i.test(item))) {
       suggestions.push("Set a stable user_id in Options or the active profile.");
     }
@@ -152,6 +155,9 @@
     }
     if (entry && entry.error && /permission/i.test(entry.error)) {
       suggestions.push("Grant site and endpoint permissions, then retry the flow.");
+    }
+    if ((entry && entry.error && /unknown event[_ ]type|event type lookup/i.test(entry.error)) || semanticErrors.some((item) => /unknown event[_ ]type|event type lookup/i.test(item))) {
+      suggestions.push("Define the missing Event Type on the resolved Pipes source directly from the workbench.");
     }
     if (entry && entry.status && entry.status >= 400) {
       suggestions.push("Inspect the endpoint response and compare the payload against the Event Router contract.");

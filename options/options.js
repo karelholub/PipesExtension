@@ -8,6 +8,8 @@
     sdk_source_url: document.getElementById("sdkSourceUrl"),
     collection_endpoint: document.getElementById("collectionEndpoint"),
     app_key: document.getElementById("appKey"),
+    prism_base_url: document.getElementById("prismBaseUrl"),
+    prism_token: document.getElementById("prismToken"),
     user_id: document.getElementById("userId"),
     mode: document.getElementById("mode"),
     tracking_enabled: document.getElementById("trackingEnabled"),
@@ -19,12 +21,16 @@
     capture_file_downloads: document.getElementById("captureFileDownloads")
   };
 
-  const response = await chrome.runtime.sendMessage({ type: "GET_SETTINGS" });
-  render(response.settings || shared.DEFAULT_SETTINGS);
+  const [settingsResponse, prismResponse] = await Promise.all([
+    chrome.runtime.sendMessage({ type: "GET_SETTINGS" }),
+    chrome.runtime.sendMessage({ type: "GET_PRISM_CONNECTION" })
+  ]);
+  render(settingsResponse.settings || shared.DEFAULT_SETTINGS, prismResponse.connection || {});
 
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     const settings = readForm();
+    const prismConnection = readPrismConnection();
     const error = validate(settings);
     if (error) {
       setMessage(error, true);
@@ -37,6 +43,21 @@
       return;
     }
 
+    const prismPermission = await ensurePrismPermission(prismConnection, settings.collection_endpoint);
+    if (!prismPermission.ok) {
+      setMessage(prismPermission.error, true);
+      return;
+    }
+
+    const prismResponse = await chrome.runtime.sendMessage({
+      type: "SAVE_PRISM_CONNECTION",
+      connection: prismConnection
+    });
+    if (!prismResponse.ok) {
+      setMessage(prismResponse.error, true);
+      return;
+    }
+
     const saveResponse = await chrome.runtime.sendMessage({
       type: "SAVE_SETTINGS",
       settings
@@ -46,7 +67,8 @@
 
   document.getElementById("resetButton").addEventListener("click", async () => {
     const resetResponse = await chrome.runtime.sendMessage({ type: "RESET_SETTINGS" });
-    render(resetResponse.settings);
+    const prismResponse = await chrome.runtime.sendMessage({ type: "GET_PRISM_CONNECTION" });
+    render(resetResponse.settings, prismResponse.connection || {});
     setMessage("Defaults restored.");
   });
 
@@ -63,7 +85,7 @@
     setMessage("Generated a new user ID. Save to apply it.");
   });
 
-  function render(settings) {
+  function render(settings, prismConnection) {
     Object.entries(shared.mergeSettings(settings)).forEach(([key, value]) => {
       if (!fields[key]) {
         return;
@@ -75,6 +97,9 @@
         fields[key].value = value;
       }
     });
+
+    fields.prism_base_url.value = prismConnection && prismConnection.base_url ? prismConnection.base_url : "";
+    fields.prism_token.value = prismConnection && prismConnection.token ? prismConnection.token : "";
   }
 
   function readForm() {
@@ -91,6 +116,13 @@
       capture_scroll_depth: fields.capture_scroll_depth.checked,
       capture_outbound_clicks: fields.capture_outbound_clicks.checked,
       capture_file_downloads: fields.capture_file_downloads.checked
+    };
+  }
+
+  function readPrismConnection() {
+    return {
+      base_url: fields.prism_base_url.value.trim(),
+      token: fields.prism_token.value.trim()
     };
   }
 
@@ -130,6 +162,29 @@
     return {
       ok: requested,
       error: requested ? null : `Endpoint permission was not granted for ${pattern}.`
+    };
+  }
+
+  async function ensurePrismPermission(connection, fallbackEndpoint) {
+    const baseUrl = connection.base_url || fallbackEndpoint;
+    if (!connection.token || !baseUrl) {
+      return { ok: true };
+    }
+
+    const pattern = shared.endpointPermissionPattern(baseUrl);
+    if (!pattern) {
+      return { ok: false, error: "Prism base URL must be a valid http(s) URL." };
+    }
+
+    const granted = await chrome.permissions.contains({ origins: [pattern] });
+    if (granted) {
+      return { ok: true };
+    }
+
+    const requested = await chrome.permissions.request({ origins: [pattern] });
+    return {
+      ok: requested,
+      error: requested ? null : `Prism host permission was not granted for ${pattern}.`
     };
   }
 })();

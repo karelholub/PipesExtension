@@ -168,6 +168,12 @@
           <div id="eventCatalog" class="summary-grid"></div>
           <section class="card">
             <div class="card-header">
+              <h3>Pipes setup queue</h3>
+            </div>
+            <div id="pipesSetupQueue" class="stack"></div>
+          </section>
+          <section class="card">
+            <div class="card-header">
               <h3>Validation queue</h3>
               <div class="filters">
                 <input id="validationSearch" type="search" placeholder="Filter events">
@@ -232,6 +238,55 @@
               <p>Manage environment settings and payload contracts used by the workbench.</p>
             </div>
           </header>
+          <section class="card">
+            <div class="card-header">
+              <h3>Pipes control</h3>
+            </div>
+            <div id="pipesControl" class="stack"></div>
+          </section>
+          <div class="split">
+            <section class="card">
+              <div class="card-header">
+                <h3>Tracking rules</h3>
+                <div class="inline-buttons">
+                  <button id="generateTrackingRulesButton" type="button">Generate from rules</button>
+                  <button id="saveTrackingRulesButton" type="button">Save</button>
+                </div>
+              </div>
+              <textarea id="trackingRulesEditor" spellcheck="false"></textarea>
+            </section>
+            <section class="card">
+              <div class="card-header">
+                <h3>Source transform</h3>
+                <button id="saveSourceFunctionButton" type="button">Save</button>
+              </div>
+              <textarea id="sourceFunctionEditor" spellcheck="false"></textarea>
+            </section>
+          </div>
+          <div class="split">
+            <section class="card">
+              <div class="card-header">
+                <h3>Source transform test</h3>
+                <button id="runSourceTestButton" type="button">Run test</button>
+              </div>
+              <p id="sourceTestSummary" class="notice"></p>
+              <label class="field">
+                <span>Payload JSON</span>
+                <textarea id="sourceTestPayload" spellcheck="false"></textarea>
+              </label>
+              <label class="field">
+                <span>Headers JSON</span>
+                <textarea id="sourceTestHeaders" class="compact-editor" spellcheck="false"></textarea>
+              </label>
+              <pre id="sourceTestResult"></pre>
+            </section>
+            <section class="card">
+              <div class="card-header">
+                <h3>Source Event Types</h3>
+              </div>
+              <div id="pipesEventTypes" class="stack"></div>
+            </section>
+          </div>
           <div class="split">
             <section class="card">
               <div class="card-header">

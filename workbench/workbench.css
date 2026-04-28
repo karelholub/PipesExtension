@@ -274,6 +274,10 @@ textarea {
   font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+textarea.compact-editor {
+  min-height: 120px;
+}
+
 pre {
   margin: 0;
   max-height: 320px;
@@ -298,6 +302,22 @@ pre {
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
   gap: 12px;
   align-items: end;
+}
+
+.identifier-builder {
+  display: grid;
+  grid-template-columns: minmax(0, 180px) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #e1e7ee;
+  border-radius: 6px;
+  background: #f8fafc;
+}
+
+.builder-actions {
+  align-self: end;
 }
 
 .timeline-item {
@@ -467,6 +487,7 @@ pre {
   .grid,
   .split,
   .rule-form,
+  .identifier-builder,
   .kv {
     grid-template-columns: 1fr;
   }

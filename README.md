@@ -50,6 +50,7 @@ Open the extension popup and click **Options**. The options page supports:
 - SDK source URL
 - Collection endpoint
 - App or project key
+- Prism base URL and Prism API token for direct Pipes configuration from the extension
 - User ID, with paste support or one-click random UUID generation
 - Global tracking enabled/disabled
 - Debug logging
@@ -59,6 +60,8 @@ Open the extension popup and click **Options**. The options page supports:
 - Optional scroll depth, outbound click, and file download metadata
 
 When saving a custom endpoint, Chrome may ask for host permission for that endpoint origin. This is required so the service worker can send cross-origin `fetch` POST requests.
+
+The Prism API token is stored in `chrome.storage.local`, not sync storage, so it stays local to the browser profile where the extension is installed.
 
 ## Modes
 
@@ -131,6 +134,17 @@ It includes:
 - Source coverage summary across data layers, storage, cookies, globals, meta tags, and tracking-related resources
 - Live observation of tracking-like `fetch` and `XMLHttpRequest` calls from the inspected page, with method, status, duration, request size, and sanitized request/response previews
 - Event inspector with payload validation, PII warnings, copy, and replay
+- Direct Pipes source control: when the collect endpoint reports an unknown `event_type`, the workbench can create that Event Type on the resolved source without leaving the extension, including inferred schema and identifier rules when a sample is available
+- Pipes setup queue that summarizes captured Event Types missing from Pipes or recently failing delivery, with one-click definition sync from captured payloads
+- Event Type sync from validation cards, creating missing definitions or additively updating existing definitions with inferred schema and identifier rules
+- Router-side source validation from captured events, so admins can verify whether the Pipes source transform emits valid Event Router events before replaying traffic
+- Inline Event Type management for the resolved source, including JSON Schema and identifier-rule editing
+- Event Type preview checks that validate the configured JSON Schema and show identifier-rule extraction results against source-test output or recent captured examples before saving to Pipes
+- One-click JSON Schema inference for Event Types from source-test output or recent captured payloads
+- Identifier-rule builder that uses Pipes identifier types and payload-path suggestions so admins can add rules without hand-writing JSON
+- Source transform test harness that runs the current source function against recent example payloads from Pipes
+- Tracking rules editor for the resolved source, including generation from local selector rules and saving to Pipes
+- Source transform editor for updating the resolved source function after testing changes
 - SDK setup diagnostics for matching script tags, likely Meiro globals, injected SDK state, consent APIs, and CSP meta tags
 - Data layer inspector for `dataLayer`, `digitalData`, `utag_data`, or custom global names
 - Data layer push history captured after tracking is enabled
