@@ -62,7 +62,20 @@
     runSourceTestButton: document.getElementById("runSourceTestButton"),
     pipesEventTypes: document.getElementById("pipesEventTypes"),
     profileName: document.getElementById("profileName"),
-    profilesList: document.getElementById("profilesList")
+    profilesList: document.getElementById("profilesList"),
+    opsHealth: document.getElementById("opsHealth"),
+    coverageButton: document.getElementById("coverageButton"),
+    coverageOffButton: document.getElementById("coverageOffButton"),
+    coverageSummary: document.getElementById("coverageSummary"),
+    generateFromDataLayerButton: document.getElementById("generateFromDataLayerButton"),
+    profileSearchButton: document.getElementById("profileSearchButton"),
+    profileSearchType: document.getElementById("profileSearchType"),
+    profileSearchInput: document.getElementById("profileSearchInput"),
+    profileSearchResult: document.getElementById("profileSearchResult"),
+    identitySimButton: document.getElementById("identitySimButton"),
+    identitySimResult: document.getElementById("identitySimResult"),
+    runTransformTestsButton: document.getElementById("runTransformTestsButton"),
+    transformTestsList: document.getElementById("transformTestsList")
   };
 
   let activeTab = null;
@@ -113,6 +126,12 @@
   document.getElementById("saveContractsButton").addEventListener("click", safeAction(saveContracts));
   document.getElementById("createProfileButton").addEventListener("click", safeAction(createProfile));
   els.generateTrackingRulesButton.addEventListener("click", generateTrackingRulesFromSelectorRules);
+  els.generateFromDataLayerButton.addEventListener("click", generateTrackingRulesFromDataLayer);
+  els.coverageButton.addEventListener("click", safeAction(showSelectorCoverage));
+  els.coverageOffButton.addEventListener("click", safeAction(hideSelectorCoverage));
+  els.profileSearchButton.addEventListener("click", safeAction(runProfileSearch));
+  els.identitySimButton.addEventListener("click", safeAction(runIdentitySimulation));
+  els.runTransformTestsButton.addEventListener("click", safeAction(runAllTransformTests));
   els.saveTrackingRulesButton.addEventListener("click", safeAction(saveTrackingRules));
   els.saveSourceFunctionButton.addEventListener("click", safeAction(saveSourceFunction));
   els.runSourceTestButton.addEventListener("click", safeAction(runSourceTest));
@@ -302,6 +321,7 @@
       : (state.readiness || []).map((item) => readinessCard(item));
     renderStack(els.readinessList, readinessNodes);
     renderStack(els.sourceCoverage, (state.source_coverage || []).map((item) => sourceCoverageCard(item)));
+    renderOpsHealth();
     renderStack(
       els.timelineList,
       filteredTimeline.map((item) => timelineCard(item)),
@@ -402,6 +422,36 @@
     renderSourceEditors();
     renderSourceTest();
     renderPipesEventTypes();
+    renderTransformTests();
+    renderProfileSearchControls();
+  }
+
+  function renderProfileSearchControls() {
+    if (document.activeElement !== els.profileSearchInput && !els.profileSearchInput.value && state.settings && state.settings.user_id) {
+      els.profileSearchInput.value = state.settings.user_id;
+    }
+
+    const identifierTypes = state.pipes && Array.isArray(state.pipes.identifier_types) ? state.pipes.identifier_types : [];
+    const names = identifierTypes.map((item) => item.name).filter(Boolean);
+    const signature = names.join("|");
+    if (els.profileSearchType.dataset.signature === signature) {
+      return;
+    }
+    const previous = els.profileSearchType.value;
+    els.profileSearchType.textContent = "";
+    names.forEach((name) => {
+      const option = document.createElement("option");
+      option.value = name;
+      option.textContent = name;
+      els.profileSearchType.appendChild(option);
+    });
+    els.profileSearchType.dataset.signature = signature;
+    if (previous && names.includes(previous)) {
+      els.profileSearchType.value = previous;
+    } else if (names.includes("user_id")) {
+      els.profileSearchType.value = "user_id";
+    }
+    els.profileSearchType.disabled = !names.length;
   }
 
   function renderPipesRouting() {
@@ -604,6 +654,220 @@
         : "Generated tracking rules from local selector rules. Review before saving to Pipes.",
       nonStandard.length > 0
     );
+  }
+
+  function generateTrackingRulesFromDataLayer() {
+    const pushes = state && state.page && Array.isArray(state.page.data_layer_pushes) ? state.page.data_layer_pushes : [];
+    const names = shared.extractDataLayerEventNames(pushes);
+    if (!names.length) {
+      setMessage("No dataLayer event pushes have been captured yet. Interact with the page while collection is enabled, then try again.", true);
+      return;
+    }
+
+    const lines = ["function configure(sdk, on, runtime) {"];
+    const unmapped = [];
+    names.forEach((name) => {
+      const snake = shared.camelToSnakeCase(name);
+      const mapped = shared.GA4_STANDARD_EVENT_NAMES.includes(name)
+        ? name
+        : (shared.GA4_STANDARD_EVENT_NAMES.includes(snake) ? snake : null);
+      lines.push(`  on.dataLayer(${JSON.stringify(name)}, (payload) => {`);
+      if (mapped) {
+        lines.push(`    sdk.track(${JSON.stringify(mapped)}, payload);`);
+      } else {
+        unmapped.push(name);
+        lines.push(`    // TODO: "${name}" has no predefined Web SDK event name — map it to one before saving.`);
+        lines.push(`    // sdk.track("select_content", payload);`);
+      }
+      lines.push("  });");
+    });
+    lines.push("}");
+
+    sourceDraftState.trackingRulesCode = lines.join("\n");
+    sourceDraftState.trackingRulesWarningAcknowledged = false;
+    els.trackingRulesEditor.value = sourceDraftState.trackingRulesCode;
+    setMessage(
+      unmapped.length
+        ? `Generated rules for ${names.length} dataLayer event(s); ${unmapped.length} (${unmapped.join(", ")}) need manual mapping to a predefined event name.`
+        : `Generated rules for ${names.length} dataLayer event(s), all mapped to predefined Web SDK event names. Review before saving.`,
+      unmapped.length > 0
+    );
+  }
+
+  function coverageSelectors() {
+    const ruleSelectors = (state && state.settings && Array.isArray(state.settings.selector_rules) ? state.settings.selector_rules : [])
+      .filter((rule) => rule.enabled !== false && rule.selector)
+      .map((rule) => rule.selector);
+    const trackingRuleSelectors = Array.from(
+      String(sourceDraftState.trackingRulesCode || "").matchAll(/on\.(?:click|formSubmit|input)\(\s*["']([^"']+)["']/g),
+      (match) => match[1]
+    );
+    return Array.from(new Set(ruleSelectors.concat(trackingRuleSelectors)));
+  }
+
+  async function showSelectorCoverage() {
+    if (!activeTab || !activeTab.id) {
+      setMessage("No inspected tab is available for the coverage overlay.", true);
+      return;
+    }
+    const selectors = coverageSelectors();
+    if (!selectors.length) {
+      setMessage("No selector rules or tracking-rule selectors are available to check coverage against.", true);
+      return;
+    }
+    const response = await runtimeMessage({ type: "SHOW_COVERAGE", tabId: activeTab.id, selectors });
+    if (!response.ok) {
+      setMessage(response.error || "Could not render the coverage overlay.", true);
+      return;
+    }
+    els.coverageSummary.textContent = `${response.covered} element(s) covered (solid green), ${response.uncovered} interactive element(s) untracked (dashed red)${response.invalid_selectors && response.invalid_selectors.length ? ` · invalid selector(s): ${response.invalid_selectors.join(", ")}` : ""}.`;
+    setMessage("Coverage overlay is showing on the inspected page.");
+  }
+
+  async function hideSelectorCoverage() {
+    if (!activeTab || !activeTab.id) {
+      return;
+    }
+    await runtimeMessage({ type: "HIDE_COVERAGE", tabId: activeTab.id });
+    els.coverageSummary.textContent = "";
+    setMessage("Coverage overlay removed.");
+  }
+
+  function renderOpsHealth() {
+    const ops = state && state.pipes && state.pipes.ops ? state.pipes.ops : null;
+    if (!ops || (!ops.queues && !ops.dashboard && !ops.error_stats)) {
+      renderStack(els.opsHealth, [], "Connect a Prism token in Options to see queue health, event volume, and recent errors.");
+      return;
+    }
+    const nodes = [];
+    if (ops.queues) {
+      nodes.push(jsonCard("Ingestion queues", ops.queues));
+    }
+    if (ops.dashboard) {
+      nodes.push(jsonCard("Dashboard", ops.dashboard));
+    }
+    if (ops.error_stats) {
+      nodes.push(jsonCard("Error stats", ops.error_stats));
+    }
+    renderStack(els.opsHealth, nodes);
+  }
+
+  function renderTransformTests() {
+    const tests = Array.isArray(state.transform_tests) ? state.transform_tests : [];
+    renderStack(els.transformTestsList, tests.map((test) => transformTestCard(test)), "No test cases pinned yet. Use \"Pin as test\" on a validation entry to snapshot its expected transform output.");
+  }
+
+  function transformTestCard(test) {
+    const last = test.last_result;
+    const article = itemCard({
+      detailKey: `transform-test:${test.id}`,
+      title: test.name,
+      meta: `expects ${test.expected.event_count} event(s) [${(test.expected.event_types || []).join(", ")}], ${test.expected.identifier_count} identifier(s) · pinned ${shared.formatTimestamp(test.created_at)}`
+    });
+    const buttons = article.querySelector(".inline-buttons");
+    buttons.appendChild(last
+      ? pill(last.ok ? "PASS" : "FAIL", last.ok ? "good" : "bad")
+      : pill("not run", "warn"));
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.textContent = "Delete";
+    deleteButton.addEventListener("click", safeAction(async () => {
+      await runtimeMessage({ type: "DELETE_TRANSFORM_TEST", testId: test.id });
+      await load();
+    }));
+    buttons.appendChild(deleteButton);
+
+    const body = article.querySelector(".item-body");
+    if (last && !last.ok) {
+      body.appendChild(subtleBox(`Last run ${shared.formatTimestamp(last.ran_at)}: ${(last.mismatches || []).join("; ")}`));
+    }
+    return article;
+  }
+
+  async function runAllTransformTests() {
+    setMessage("Running transform regression tests…");
+    const response = await runtimeMessage({ type: "RUN_TRANSFORM_TESTS" });
+    if (!response.ok) {
+      setMessage(response.error || "Transform tests could not run.", true);
+      return;
+    }
+    setMessage(
+      response.failed === 0
+        ? `All ${response.passed} transform test(s) passed.`
+        : `${response.failed}/${response.passed + response.failed} transform test(s) failed — the transform output drifted from its pinned baseline.`,
+      response.failed > 0
+    );
+    await load();
+  }
+
+  async function runProfileSearch() {
+    const identifierType = els.profileSearchType.value;
+    const identifierValue = els.profileSearchInput.value.trim();
+    renderStack(els.profileSearchResult, [], "Searching profiles…");
+    const response = await runtimeMessage({ type: "PRISM_PROFILE_SEARCH", identifierType, identifierValue });
+    if (!response.ok) {
+      renderStack(els.profileSearchResult, [subtleBox(response.error || "Profile search failed.")]);
+      return;
+    }
+    const nodes = [];
+    nodes.push(subtleBox(response.found
+      ? `Profile found for ${response.identifier_type}=${response.identifier_value} — identity resolution stitched this identifier.`
+      : `No profile found for ${response.identifier_type}=${response.identifier_value} yet. Either the events have not been processed, no identifiers were extracted, or the value differs from what the transform emits.`));
+    if (response.found && response.profile !== null && response.profile !== undefined) {
+      nodes.push(jsonCard("Profile", response.profile));
+    }
+    renderStack(els.profileSearchResult, nodes);
+  }
+
+  function extractIdentifiersForSimulation(entry, eventTypesByName) {
+    const eventType = eventTypesByName[entry.event_type];
+    if (!eventType || !Array.isArray(eventType.identifierRules)) {
+      return [];
+    }
+    // Approximation: identifier rules apply to the post-transform
+    // event_payload; the Web SDK template transform spreads payload.payload
+    // and lifts user_id/session_id/client_ids to the top level, so evaluate
+    // against that merged view of the captured envelope.
+    const payload = entry.payload || {};
+    const merged = Object.assign({}, payload.payload || {}, {
+      user_id: payload.user_id,
+      session_id: payload.session_id,
+      client_ids: payload.client_ids
+    });
+    return eventType.identifierRules
+      .map((rule) => ({
+        type: rule.identifierTypeName || rule.identifierTypeId,
+        value: evaluateJsonPath(merged, rule.rule)
+      }))
+      .filter((item) => item.value !== undefined && item.value !== null && item.value !== "" && typeof item.value !== "object");
+  }
+
+  function runIdentitySimulation() {
+    const pipes = state && state.pipes ? state.pipes : {};
+    const identifierTypes = Array.isArray(pipes.identifier_types) ? pipes.identifier_types : [];
+    const eventTypesByName = {};
+    (pipes.event_types || []).forEach((item) => {
+      eventTypesByName[item.name] = item;
+    });
+
+    const logs = (state.logs || []).filter((entry) => entry.payload && entry.event_type);
+    if (!logs.length) {
+      renderStack(els.identitySimResult, [subtleBox("No captured events to simulate with. Enable collection and interact with the page first.")]);
+      return;
+    }
+
+    const eventSets = logs.slice(0, 50).reverse().map((entry) => ({
+      event_type: entry.event_type,
+      identifiers: extractIdentifiersForSimulation(entry, eventTypesByName)
+    }));
+    const simulation = shared.simulateIdentityResolution(eventSets, identifierTypes);
+    const nodes = [
+      subtleBox(`${simulation.profiles.length} simulated profile(s) from ${eventSets.length} captured event(s), ${simulation.overflow_count} overflow profile(s). Approximate local simulation — not server state.`),
+      jsonCard("Simulated profiles", simulation.profiles),
+      jsonCard("Resolution log", simulation.log)
+    ];
+    renderStack(els.identitySimResult, nodes);
   }
 
   function exportSetup() {
@@ -994,7 +1258,42 @@
       }
       renderValidation();
     }));
-    actions.append(replayButton, copyButton, verifyButton);
+    const traceButton = document.createElement("button");
+    traceButton.type = "button";
+    traceButton.textContent = "Trace";
+    traceButton.disabled = !canSyncPipesEventType(entry);
+    traceButton.addEventListener("click", safeAction(async () => {
+      setPipesActionResult(actionResultKey, { status: "pending", label: "Tracing event from capture through transform, Event Types, identifiers, and routing." });
+      renderValidation();
+      const response = await runtimeMessage({
+        type: "TRACE_EVENT",
+        payload: entry.payload,
+        logInfo: { ok: entry.ok, status: entry.status, error: entry.error }
+      });
+      setPipesActionResult(actionResultKey, response.ok
+        ? { status: response.trace_ok ? "ok" : "error", label: response.summary, detail: response.trace }
+        : { status: "error", label: response.error });
+      setMessage(response.ok ? response.summary : response.error, !response.ok || !response.trace_ok);
+      renderValidation();
+    }));
+
+    const pinTestButton = document.createElement("button");
+    pinTestButton.type = "button";
+    pinTestButton.textContent = "Pin as test";
+    pinTestButton.disabled = !canSyncPipesEventType(entry);
+    pinTestButton.addEventListener("click", safeAction(async () => {
+      const response = await runtimeMessage({
+        type: "SAVE_TRANSFORM_TEST",
+        name: `${entry.event_type} @ ${shared.formatTimestamp(entry.timestamp)}`,
+        payload: entry.payload
+      });
+      setMessage(response.ok
+        ? `Pinned "${response.test.name}" expecting ${response.test.expected.event_count} event(s) and ${response.test.expected.identifier_count} identifier(s). Run it from the Pipes view after transform edits.`
+        : response.error, !response.ok);
+      await load();
+    }));
+
+    actions.append(replayButton, copyButton, verifyButton, traceButton, pinTestButton);
     if (canSyncPipesEventType(entry)) {
       const syncButton = document.createElement("button");
       syncButton.type = "button";
@@ -1114,29 +1413,6 @@
   function sourceTestEventResult(index, validation) {
     const results = validation && Array.isArray(validation.eventResults) ? validation.eventResults : [];
     return results.find((item) => item.index === index) || results[index] || null;
-  }
-
-  function summarizeSourceTestResult(result) {
-    const validation = result && result.validation ? result.validation : {};
-    const eventResults = Array.isArray(validation.eventResults) ? validation.eventResults : [];
-    const errors = [];
-    if (Array.isArray(validation.errors)) {
-      errors.push(...validation.errors.map((item) => String(item)));
-    }
-    eventResults.forEach((item) => {
-      if (Array.isArray(item.errors) && item.errors.length) {
-        errors.push(...item.errors.map((error) => `event ${item.index}: ${String(error)}`));
-      }
-    });
-    const events = Array.isArray(result && result.events) ? result.events : [];
-    return {
-      ok: Boolean(result && result.ok && validation.ok !== false && errors.length === 0),
-      event_count: events.length || eventResults.length,
-      valid_event_count: eventResults.filter((item) => item.ok !== false).length || (events.length && !errors.length ? events.length : 0),
-      event_types: eventResults.map((item) => item.eventType).filter(Boolean),
-      identifier_count: eventResults.reduce((count, item) => count + (Array.isArray(item.identifiers) ? item.identifiers.length : 0), 0),
-      errors
-    };
   }
 
   function buildPipesSetupQueue() {
@@ -1410,7 +1686,7 @@
     }
 
     const result = sourceTestState.result;
-    const summary = summarizeSourceTestResult(result);
+    const summary = shared.summarizeSourceTestResult(result);
     const nodes = [
       sourceTestSummaryCard(summary)
     ];
@@ -2190,7 +2466,7 @@
       return "";
     }
     if (verification.ok) {
-      return `Source test passed with ${verification.valid_event_count}/${verification.event_count} valid event(s) and ${verification.identifiers || 0} identifier(s).`;
+      return `Source test passed with ${verification.valid_event_count}/${verification.event_count} valid event(s) and ${verification.identifier_count || 0} identifier(s).`;
     }
     const errorText = verification.errors && verification.errors.length
       ? verification.errors.slice(0, 2).join(" ")

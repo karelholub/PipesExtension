@@ -10,6 +10,8 @@
     app_key: document.getElementById("appKey"),
     prism_base_url: document.getElementById("prismBaseUrl"),
     prism_token: document.getElementById("prismToken"),
+    profile_api_token: document.getElementById("profileApiToken"),
+    profile_api_path: document.getElementById("profileApiPath"),
     user_id: document.getElementById("userId"),
     mode: document.getElementById("mode"),
     tracking_enabled: document.getElementById("trackingEnabled"),
@@ -106,6 +108,8 @@
 
     fields.prism_base_url.value = prismConnection && prismConnection.base_url ? prismConnection.base_url : "";
     fields.prism_token.value = prismConnection && prismConnection.token ? prismConnection.token : "";
+    fields.profile_api_token.value = prismConnection && prismConnection.profile_api_token ? prismConnection.profile_api_token : "";
+    fields.profile_api_path.value = prismConnection && prismConnection.profile_api_path ? prismConnection.profile_api_path : shared.DEFAULT_PROFILE_API_PATH;
 
     const consent = shared.mergeSettings(settings).consent || {};
     consentFields.storage_persistence.value = consent.storage_persistence || "granted";
@@ -139,7 +143,9 @@
   function readPrismConnection() {
     return {
       base_url: fields.prism_base_url.value.trim(),
-      token: fields.prism_token.value.trim()
+      token: fields.prism_token.value.trim(),
+      profile_api_token: fields.profile_api_token.value.trim(),
+      profile_api_path: fields.profile_api_path.value.trim() || shared.DEFAULT_PROFILE_API_PATH
     };
   }
 

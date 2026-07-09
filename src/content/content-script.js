@@ -73,6 +73,17 @@
       return true;
     }
 
+    if (message.type === "CONTENT_SHOW_COVERAGE") {
+      sendResponse(showCoverage(message.selectors || []));
+      return true;
+    }
+
+    if (message.type === "CONTENT_HIDE_COVERAGE") {
+      hideCoverage();
+      sendResponse({ ok: true });
+      return true;
+    }
+
     return false;
   });
 
@@ -118,6 +129,7 @@
 
     state.active = false;
     stopElementPicker();
+    hideCoverage();
   }
 
   function installPageBridge(onReady) {
@@ -633,6 +645,58 @@
       document.removeEventListener("keydown", cancel, true);
       overlay.remove();
     };
+  }
+
+  function showCoverage(selectors) {
+    hideCoverage();
+
+    const style = document.createElement("style");
+    style.dataset.meiroCoverageStyle = "true";
+    style.textContent = [
+      "[data-meiro-coverage='covered'] { outline: 2px solid #168a5e !important; outline-offset: 1px !important; }",
+      "[data-meiro-coverage='uncovered'] { outline: 2px dashed #b42318 !important; outline-offset: 1px !important; }"
+    ].join("\n");
+    document.documentElement.appendChild(style);
+
+    const covered = new Set();
+    const invalidSelectors = [];
+    (selectors || []).slice(0, 100).forEach((selector) => {
+      if (!selector) {
+        return;
+      }
+      try {
+        document.querySelectorAll(selector).forEach((element) => covered.add(element));
+      } catch (_error) {
+        invalidSelectors.push(selector);
+      }
+    });
+
+    covered.forEach((element) => {
+      element.setAttribute("data-meiro-coverage", "covered");
+    });
+
+    let uncoveredCount = 0;
+    document.querySelectorAll("a, button, form, [role='button'], [role='link']").forEach((element) => {
+      if (covered.has(element) || element.closest("[data-meiro-coverage='covered']")) {
+        return;
+      }
+      element.setAttribute("data-meiro-coverage", "uncovered");
+      uncoveredCount += 1;
+    });
+
+    return {
+      ok: true,
+      covered: covered.size,
+      uncovered: uncoveredCount,
+      invalid_selectors: invalidSelectors
+    };
+  }
+
+  function hideCoverage() {
+    document.querySelectorAll("[data-meiro-coverage]").forEach((element) => {
+      element.removeAttribute("data-meiro-coverage");
+    });
+    document.querySelectorAll("style[data-meiro-coverage-style]").forEach((element) => element.remove());
   }
 
   function stopElementPicker() {

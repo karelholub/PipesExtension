@@ -161,6 +161,7 @@
     "post_score", "unlock_achievement", "earn_virtual_currency", "spend_virtual_currency"
   ]);
 
+  const DEFAULT_PROFILE_API_PATH = "/profile-api/extension";
   const EVENT_VERSION = "1.2.0";
   const LOG_LIMIT = 200;
   const STORAGE_KEYS = Object.freeze({
@@ -170,7 +171,8 @@
     CONTRACTS: "meiro_tracker_contracts",
     PROFILES: "meiro_tracker_profiles",
     ENABLED_TABS: "meiro_tracker_enabled_tabs",
-    PRISM_CONNECTION: "meiro_tracker_prism_connection"
+    PRISM_CONNECTION: "meiro_tracker_prism_connection",
+    TRANSFORM_TESTS: "meiro_tracker_transform_tests"
   });
 
   const SENSITIVE_FIELD_PATTERNS = Object.freeze([
@@ -222,6 +224,7 @@
     DEFAULT_RECIPES,
     MODES,
     GA4_STANDARD_EVENT_NAMES,
+    DEFAULT_PROFILE_API_PATH,
     EVENT_VERSION,
     LOG_LIMIT,
     STORAGE_KEYS,

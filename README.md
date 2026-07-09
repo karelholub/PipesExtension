@@ -51,6 +51,7 @@ Open the extension popup and click **Options**. The options page supports:
 - Collection endpoint
 - App or project key
 - Prism base URL and Prism API token for direct Pipes configuration from the extension
+- Profile API token (`mppak_...`) and Profile API path (default `/profile-api/extension`) for profile lookups; the token is sent as an `X-API-Token` header against the Prism base URL
 - User ID, with paste support or one-click random UUID generation
 - Global tracking enabled/disabled
 - Debug logging
@@ -62,7 +63,7 @@ Open the extension popup and click **Options**. The options page supports:
 
 When saving a custom endpoint, Chrome may ask for host permission for that endpoint origin. This is required so the service worker can send cross-origin `fetch` POST requests.
 
-The Prism API token is stored in `chrome.storage.local`, not sync storage, so it stays local to the browser profile where the extension is installed.
+The Prism API token and Profile API token are stored in `chrome.storage.local`, not sync storage, so they stay local to the browser profile where the extension is installed.
 
 ## Modes
 
@@ -152,6 +153,13 @@ It includes:
 - Inline Event Type management for the resolved source, including JSON Schema and identifier-rule editing, with delete support (two-step confirm)
 - Identifier type merge/overflow limits (`maxIdentifiers`, `priority`) surfaced directly, instead of just names, so admins can see profile-merge behavior without leaving the extension
 - Event routing visibility: which Pipes (Delivery) route this source's events onward, to which Event Destination, enable/disable toggling, and on-demand delivery inspection — separate from ingestion/Event Types
+- Event journey tracer: a Trace action on validation entries follows one captured event step-by-step — capture, /collect delivery, transform output, Event Type definition, identifier extraction, routing, and recent downstream deliveries — and reports where the journey breaks
+- Profile lookup: query the Pipes Profile API (`identifier_type` + `identifier_value`, type picked from the source's available identifier types, value prefilled with the configured user ID) to confirm identity resolution stitched captured events onto a unified profile
+- Transform regression tests: pin captured payloads as named test cases (snapshotting expected event count/types/identifiers), then re-run the whole suite against the live transform after edits to catch drift
+- Instance health panel in Overview: ingestion queue status, dashboard volume, and error stats from the connected Pipes instance, to explain accepted-but-not-visible situations
+- dataLayer → tracking rules generator: turns observed dataLayer event pushes into on.dataLayer(...) tracking-rule stubs, auto-mapped to predefined Web SDK event names where possible
+- Selector coverage overlay: highlights elements covered by selector rules and tracking-rule selectors (solid green) versus untracked interactive elements (dashed red) directly on the inspected page
+- Identity-resolution simulator: local simulation of the documented merge/overflow algorithm using the source's identifier rules and each identifier type's maxIdentifiers/priority, run against captured events
 - Event Type preview checks that validate the configured JSON Schema and show identifier-rule extraction results against source-test output or recent captured examples before saving to Pipes
 - One-click JSON Schema inference for Event Types from source-test output or recent captured payloads
 - Identifier-rule builder that uses Pipes identifier types and payload-path suggestions so admins can add rules without hand-writing JSON

@@ -103,6 +103,20 @@ async function handleMessage(message, sender) {
       return getPipeDeliveries(message.pipeId);
     case "TOGGLE_PRISM_PIPE":
       return togglePrismPipe(message.pipeId);
+    case "TRACE_EVENT":
+      return traceEvent(message.payload, message.logInfo);
+    case "PRISM_PROFILE_SEARCH":
+      return prismProfileSearch(message.identifierType, message.identifierValue);
+    case "SAVE_TRANSFORM_TEST":
+      return saveTransformTest(message.name, message.payload);
+    case "DELETE_TRANSFORM_TEST":
+      return deleteTransformTest(message.testId);
+    case "RUN_TRANSFORM_TESTS":
+      return runTransformTests();
+    case "SHOW_COVERAGE":
+      return forwardToTab(message.tabId, { type: "CONTENT_SHOW_COVERAGE", selectors: message.selectors });
+    case "HIDE_COVERAGE":
+      return forwardToTab(message.tabId, { type: "CONTENT_HIDE_COVERAGE" });
     default:
       return { ok: false, error: "Unknown message type." };
   }
@@ -135,18 +149,26 @@ async function getPrismConnection() {
   const connection = stored[shared.STORAGE_KEYS.PRISM_CONNECTION] || {};
   return {
     base_url: String(connection.base_url || "").trim(),
-    token: String(connection.token || "").trim()
+    token: String(connection.token || "").trim(),
+    profile_api_token: String(connection.profile_api_token || "").trim(),
+    profile_api_path: String(connection.profile_api_path || "").trim() || shared.DEFAULT_PROFILE_API_PATH
   };
 }
 
 async function savePrismConnection(connection) {
   const nextConnection = {
     base_url: String(connection && connection.base_url || "").trim(),
-    token: String(connection && connection.token || "").trim()
+    token: String(connection && connection.token || "").trim(),
+    profile_api_token: String(connection && connection.profile_api_token || "").trim(),
+    profile_api_path: String(connection && connection.profile_api_path || "").trim() || shared.DEFAULT_PROFILE_API_PATH
   };
 
   if (nextConnection.base_url && !shared.isValidHttpUrl(nextConnection.base_url)) {
     throw new Error("Prism base URL must be a valid http(s) URL.");
+  }
+
+  if (!nextConnection.profile_api_path.startsWith("/")) {
+    throw new Error("Profile API path must start with '/'.");
   }
 
   await chrome.storage.local.set({ [shared.STORAGE_KEYS.PRISM_CONNECTION]: nextConnection });
@@ -338,7 +360,11 @@ async function logRuleError(message, sender) {
 }
 
 async function postEvent(settings, payload) {
-  const body = JSON.stringify(payload);
+  // The Pipes Web SDK source transform template does
+  // `if (!Array.isArray(payload)) return [];` — /collect always expects a
+  // JSON array of events, even for a single event, or the transform silently
+  // emits nothing.
+  const body = JSON.stringify([payload]);
   const headers = { "Content-Type": "application/json" };
   if (settings.app_key) {
     headers["X-App-Key"] = settings.app_key;
@@ -530,12 +556,13 @@ async function getWorkbenchState(tabId) {
     await ensureEnabledTabRunning(tabId);
   }
 
-  const [settings, logs, contracts, profiles, status] = await Promise.all([
+  const [settings, logs, contracts, profiles, status, transformTests] = await Promise.all([
     getSettings(),
     getLogs(),
     getContracts(),
     getProfiles(),
-    getTabStatus(tabId)
+    getTabStatus(tabId),
+    getTransformTests()
   ]);
   let page = null;
 
@@ -563,6 +590,7 @@ async function getWorkbenchState(tabId) {
     status: status.status,
     page,
     pipes,
+    transform_tests: transformTests,
     readiness: shared.summarizeReadiness({ settings, logs: scopedLogs, page }),
     event_catalog: shared.buildEventCatalog(scopedLogs),
     delivery_summary: shared.buildDeliverySummary(scopedLogs),
@@ -648,11 +676,14 @@ async function getPrismWorkbenchState(settings) {
   }
 
   try {
-    const [sources, identifierTypes, allPipes, eventDestinations] = await Promise.all([
+    const [sources, identifierTypes, allPipes, eventDestinations, healthQueues, dashboard, errorStats] = await Promise.all([
       prismApiRequest(connection, baseUrl, "/api/event-streams"),
       prismApiRequest(connection, baseUrl, "/api/identifier-types"),
       prismApiRequest(connection, baseUrl, "/api/pipes").catch(() => []),
-      prismApiRequest(connection, baseUrl, "/api/event-destinations").catch(() => [])
+      prismApiRequest(connection, baseUrl, "/api/event-destinations").catch(() => []),
+      prismApiRequest(connection, baseUrl, "/api/health/queues").catch(() => null),
+      prismApiRequest(connection, baseUrl, "/api/dashboard").catch(() => null),
+      prismApiRequest(connection, baseUrl, "/api/error-stats").catch(() => null)
     ]);
     const sourceSummary = (sources || []).find((item) => item.slug === sourceSlug) || null;
     let source = sourceSummary;
@@ -718,6 +749,12 @@ async function getPrismWorkbenchState(settings) {
       event_types: source && Array.isArray(source.eventTypes) ? source.eventTypes : [],
       recent_examples: recentExamples,
       routing,
+      ops: {
+        queues: healthQueues,
+        dashboard,
+        error_stats: errorStats,
+        fetched_at: new Date().toISOString()
+      },
       identifier_types: Array.isArray(identifierTypes) ? identifierTypes.map((item) => ({
         id: item.id,
         name: item.name,
@@ -925,19 +962,21 @@ async function testPrismSource(payload, headers) {
 }
 
 async function verifyPrismEventPayload(payload) {
-  const verification = await testPrismSource(payload, {});
+  // Mirrors postEvent(): a captured extension event is verified as it would
+  // actually be sent to /collect, which requires an array of events.
+  const verification = await testPrismSource([payload], {});
   return {
     ok: true,
-    verification: summarizePrismSourceTest(verification.result),
+    verification: shared.summarizeSourceTestResult(verification.result),
     result: verification.result
   };
 }
 
 async function attachSourceVerification(result, payload) {
   try {
-    const verification = await testPrismSource(payload, {});
+    const verification = await testPrismSource([payload], {});
     return Object.assign({}, result, {
-      verification: summarizePrismSourceTest(verification.result),
+      verification: shared.summarizeSourceTestResult(verification.result),
       verification_result: verification.result
     });
   } catch (error) {
@@ -950,28 +989,6 @@ async function attachSourceVerification(result, payload) {
       }
     });
   }
-}
-
-function summarizePrismSourceTest(result) {
-  const validation = result && result.validation ? result.validation : {};
-  const eventResults = Array.isArray(validation.eventResults) ? validation.eventResults : [];
-  const errors = [];
-  if (Array.isArray(validation.errors)) {
-    errors.push(...validation.errors.map((item) => String(item)));
-  }
-  eventResults.forEach((item) => {
-    if (Array.isArray(item.errors) && item.errors.length) {
-      errors.push(...item.errors.map((error) => `event ${item.index}: ${String(error)}`));
-    }
-  });
-  return {
-    ok: Boolean(result && result.ok && validation.ok !== false && errors.length === 0),
-    event_count: Array.isArray(result && result.events) ? result.events.length : eventResults.length,
-    valid_event_count: eventResults.filter((item) => item.ok !== false).length,
-    event_types: eventResults.map((item) => item.eventType).filter(Boolean),
-    identifiers: eventResults.reduce((count, item) => count + (Array.isArray(item.identifiers) ? item.identifiers.length : 0), 0),
-    errors
-  };
 }
 
 async function savePrismTrackingRules(code) {
@@ -1017,6 +1034,242 @@ async function togglePrismPipe(pipeId) {
   const result = await prismApiRequest(sourceContext.connection, sourceContext.pipes.base_url, `/api/pipes/${pipeId}/toggle`, { method: "PUT" });
   clearPrismCache();
   return { ok: true, result };
+}
+
+async function forwardToTab(tabId, message) {
+  if (!tabId) {
+    throw new Error("Missing tab id.");
+  }
+  const response = await chrome.tabs.sendMessage(tabId, message);
+  return response || { ok: true };
+}
+
+async function traceEvent(payload, logInfo) {
+  const sourceContext = await getResolvedPrismSourceContext();
+  const pipes = sourceContext.pipes;
+  const steps = [];
+
+  steps.push({
+    step: "1. Captured by extension",
+    ok: true,
+    detail: `event_type "${payload && payload.type}" on ${payload && payload.payload ? payload.payload.page_url || "unknown page" : "unknown page"}`
+  });
+
+  if (logInfo) {
+    steps.push({
+      step: "2. Sent to /collect",
+      ok: Boolean(logInfo.ok),
+      detail: logInfo.ok
+        ? `Accepted${logInfo.status ? ` (HTTP ${logInfo.status})` : ""}.`
+        : (logInfo.error || `Rejected${logInfo.status ? ` (HTTP ${logInfo.status})` : ""}.`)
+    });
+  } else {
+    steps.push({ step: "2. Sent to /collect", ok: null, detail: "No delivery log entry available for this event." });
+  }
+
+  const testRun = await testPrismSource([payload], {});
+  const verification = shared.summarizeSourceTestResult(testRun.result);
+  steps.push({
+    step: "3. Transform output",
+    ok: verification.event_count > 0,
+    detail: verification.event_count > 0
+      ? `Transform emitted ${verification.event_count} event(s): ${verification.event_types.join(", ") || "unnamed"}.`
+      : (verification.errors[0] || "Transform emitted 0 events.")
+  });
+
+  const definedTypes = (pipes.event_types || []).map((item) => item.name);
+  const missingTypes = verification.event_types.filter((name) => !definedTypes.includes(name));
+  steps.push({
+    step: "4. Event Type defined",
+    ok: verification.event_types.length > 0 && missingTypes.length === 0,
+    detail: verification.event_types.length === 0
+      ? "No emitted event types to check."
+      : (missingTypes.length ? `Missing Event Type definition(s): ${missingTypes.join(", ")}.` : `All emitted types are defined on ${pipes.source.name}.`)
+  });
+
+  steps.push({
+    step: "5. Identifiers extracted",
+    ok: verification.identifier_count > 0,
+    detail: verification.identifier_count > 0
+      ? `${verification.identifier_count} identifier(s) extracted — the event can attach to a profile.`
+      : "No identifiers extracted; this event cannot stitch to a profile."
+  });
+
+  const routing = Array.isArray(pipes.routing) ? pipes.routing : [];
+  const enabledRoutes = routing.filter((pipe) => pipe.isEnabled && pipe.destination && pipe.destination.isEnabled);
+  steps.push({
+    step: "6. Routing (Pipes)",
+    ok: routing.length === 0 ? null : enabledRoutes.length > 0,
+    detail: routing.length === 0
+      ? "No Pipes route events out of this source (routing is optional)."
+      : `${enabledRoutes.length}/${routing.length} route(s) active: ${routing.map((pipe) => `${pipe.name}${pipe.isEnabled ? "" : " (disabled)"}`).join(", ")}.`
+  });
+
+  if (enabledRoutes.length) {
+    const deliveries = await prismApiRequest(sourceContext.connection, pipes.base_url, `/api/pipes/${enabledRoutes[0].id}/deliveries`).catch(() => null);
+    const recent = Array.isArray(deliveries) ? deliveries.slice(0, 5) : [];
+    steps.push({
+      step: "7. Recent downstream deliveries",
+      ok: recent.length > 0 ? recent.every((item) => !item.error && item.status !== "failed") : null,
+      detail: recent.length
+        ? `${recent.length} recent deliver(ies) on "${enabledRoutes[0].name}".`
+        : "No recent deliveries recorded on the first active route yet.",
+      deliveries: recent
+    });
+  }
+
+  const failures = steps.filter((item) => item.ok === false);
+  return {
+    ok: true,
+    trace_ok: failures.length === 0,
+    summary: failures.length === 0
+      ? "Event traces cleanly from capture through Pipes."
+      : `Trace stopped at "${failures[0].step}": ${failures[0].detail}`,
+    trace: steps
+  };
+}
+
+async function prismProfileSearch(identifierType, identifierValue) {
+  const type = String(identifierType || "").trim();
+  const value = String(identifierValue || "").trim();
+  if (!type) {
+    throw new Error("Choose an identifier type first.");
+  }
+  if (!value) {
+    throw new Error("Identifier value is required (e.g. a user_id or email).");
+  }
+
+  const settings = await getSettings();
+  const connection = await getPrismConnection();
+  if (!connection.profile_api_token) {
+    throw new Error("Add a Profile API token (mppak_...) in Options to look up profiles.");
+  }
+
+  const baseUrl = resolvePrismBaseUrl(settings, connection);
+  if (!baseUrl || !shared.isValidHttpUrl(baseUrl)) {
+    throw new Error("Prism base URL is missing or invalid.");
+  }
+  const permission = await hasPrismPermission(baseUrl);
+  if (!permission.ok) {
+    throw new Error(permission.error);
+  }
+
+  const url = new URL(connection.profile_api_path, baseUrl);
+  url.searchParams.set("identifier_type", type);
+  url.searchParams.set("identifier_value", value);
+
+  const response = await fetch(url.toString(), {
+    headers: { "X-API-Token": connection.profile_api_token },
+    cache: "no-store"
+  });
+  const responseData = await readResponseData(response);
+  if (response.status === 404) {
+    return {
+      ok: true,
+      found: false,
+      identifier_type: type,
+      identifier_value: value,
+      profile: null
+    };
+  }
+  if (!response.ok) {
+    throw new Error(responseData.preview || `Profile API request failed with HTTP ${response.status}.`);
+  }
+
+  return {
+    ok: true,
+    found: true,
+    identifier_type: type,
+    identifier_value: value,
+    profile: responseData.json !== null ? responseData.json : responseData.preview
+  };
+}
+
+async function getTransformTests() {
+  const stored = await chrome.storage.local.get(shared.STORAGE_KEYS.TRANSFORM_TESTS);
+  return stored[shared.STORAGE_KEYS.TRANSFORM_TESTS] || [];
+}
+
+async function saveTransformTest(name, payload) {
+  if (!payload || typeof payload !== "object") {
+    throw new Error("A captured event payload is required to pin a test case.");
+  }
+
+  // Snapshot the current transform's output as the expected baseline, so
+  // future runs detect drift from what the admin verified today.
+  const testRun = await testPrismSource([payload], {});
+  const summary = shared.summarizeSourceTestResult(testRun.result);
+  const tests = await getTransformTests();
+  const test = {
+    id: shared.uuid(),
+    name: String(name || payload.type || "test case").slice(0, 120),
+    payload,
+    expected: {
+      event_count: summary.event_count,
+      event_types: summary.event_types,
+      identifier_count: summary.identifier_count
+    },
+    baseline_ok: summary.ok,
+    created_at: new Date().toISOString(),
+    last_result: null
+  };
+  const nextTests = [test].concat(tests).slice(0, 30);
+  await chrome.storage.local.set({ [shared.STORAGE_KEYS.TRANSFORM_TESTS]: nextTests });
+  return { ok: true, test, baseline: summary };
+}
+
+async function deleteTransformTest(testId) {
+  const tests = await getTransformTests();
+  const nextTests = tests.filter((test) => test.id !== testId);
+  await chrome.storage.local.set({ [shared.STORAGE_KEYS.TRANSFORM_TESTS]: nextTests });
+  return { ok: true };
+}
+
+async function runTransformTests() {
+  const tests = await getTransformTests();
+  if (!tests.length) {
+    throw new Error("No transform test cases are pinned yet. Pin one from a validation entry first.");
+  }
+
+  const results = [];
+  for (const test of tests) {
+    let outcome;
+    try {
+      const testRun = await testPrismSource([test.payload], {});
+      const summary = shared.summarizeSourceTestResult(testRun.result);
+      const mismatches = [];
+      if (summary.event_count !== test.expected.event_count) {
+        mismatches.push(`emitted ${summary.event_count} event(s), expected ${test.expected.event_count}`);
+      }
+      const expectedTypes = (test.expected.event_types || []).slice().sort().join(",");
+      const actualTypes = (summary.event_types || []).slice().sort().join(",");
+      if (expectedTypes !== actualTypes) {
+        mismatches.push(`event types [${actualTypes}] differ from expected [${expectedTypes}]`);
+      }
+      if (summary.identifier_count !== test.expected.identifier_count) {
+        mismatches.push(`${summary.identifier_count} identifier(s), expected ${test.expected.identifier_count}`);
+      }
+      outcome = {
+        ok: mismatches.length === 0,
+        mismatches,
+        summary: { event_count: summary.event_count, event_types: summary.event_types, identifier_count: summary.identifier_count },
+        ran_at: new Date().toISOString()
+      };
+    } catch (error) {
+      outcome = { ok: false, mismatches: [error.message || String(error)], ran_at: new Date().toISOString() };
+    }
+    test.last_result = outcome;
+    results.push({ id: test.id, name: test.name, result: outcome });
+  }
+
+  await chrome.storage.local.set({ [shared.STORAGE_KEYS.TRANSFORM_TESTS]: tests });
+  const failed = results.filter((item) => !item.result.ok);
+  return {
+    ok: true,
+    passed: results.length - failed.length,
+    failed: failed.length,
+    results
+  };
 }
 
 async function getResolvedPrismSourceContext() {
