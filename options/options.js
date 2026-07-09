@@ -10,6 +10,8 @@
     app_key: document.getElementById("appKey"),
     prism_base_url: document.getElementById("prismBaseUrl"),
     prism_token: document.getElementById("prismToken"),
+    profile_api_token: document.getElementById("profileApiToken"),
+    profile_api_path: document.getElementById("profileApiPath"),
     user_id: document.getElementById("userId"),
     mode: document.getElementById("mode"),
     tracking_enabled: document.getElementById("trackingEnabled"),
@@ -20,6 +22,11 @@
     capture_scroll_depth: document.getElementById("captureScrollDepth"),
     capture_outbound_clicks: document.getElementById("captureOutboundClicks"),
     capture_file_downloads: document.getElementById("captureFileDownloads")
+  };
+  const consentFields = {
+    storage_persistence: document.getElementById("consentStoragePersistence"),
+    user_id: document.getElementById("consentUserId"),
+    session_id: document.getElementById("consentSessionId")
   };
 
   const [settingsResponse, prismResponse] = await Promise.all([
@@ -101,6 +108,13 @@
 
     fields.prism_base_url.value = prismConnection && prismConnection.base_url ? prismConnection.base_url : "";
     fields.prism_token.value = prismConnection && prismConnection.token ? prismConnection.token : "";
+    fields.profile_api_token.value = prismConnection && prismConnection.profile_api_token ? prismConnection.profile_api_token : "";
+    fields.profile_api_path.value = prismConnection && prismConnection.profile_api_path ? prismConnection.profile_api_path : shared.DEFAULT_PROFILE_API_PATH;
+
+    const consent = shared.mergeSettings(settings).consent || {};
+    consentFields.storage_persistence.value = consent.storage_persistence || "granted";
+    consentFields.user_id.value = consent.user_id || "granted";
+    consentFields.session_id.value = consent.session_id || "granted";
   }
 
   function readForm() {
@@ -117,14 +131,21 @@
       enable_web_layers: fields.enable_web_layers.checked,
       capture_scroll_depth: fields.capture_scroll_depth.checked,
       capture_outbound_clicks: fields.capture_outbound_clicks.checked,
-      capture_file_downloads: fields.capture_file_downloads.checked
+      capture_file_downloads: fields.capture_file_downloads.checked,
+      consent: {
+        storage_persistence: consentFields.storage_persistence.value,
+        user_id: consentFields.user_id.value,
+        session_id: consentFields.session_id.value
+      }
     };
   }
 
   function readPrismConnection() {
     return {
       base_url: fields.prism_base_url.value.trim(),
-      token: fields.prism_token.value.trim()
+      token: fields.prism_token.value.trim(),
+      profile_api_token: fields.profile_api_token.value.trim(),
+      profile_api_path: fields.profile_api_path.value.trim() || shared.DEFAULT_PROFILE_API_PATH
     };
   }
 

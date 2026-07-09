@@ -71,6 +71,12 @@
           </div>
           <section class="card">
             <div class="card-header">
+              <h3>Instance health</h3>
+            </div>
+            <div id="opsHealth" class="stack"></div>
+          </section>
+          <section class="card">
+            <div class="card-header">
               <h3>Live timeline</h3>
               <div class="filters">
                 <input id="timelineSearch" type="search" placeholder="Filter timeline">
@@ -114,8 +120,13 @@
               <h2>Event Builder</h2>
               <p>Pick DOM elements, create mapping rules, and inspect forms and interactive elements.</p>
             </div>
-            <button id="pickerButton" type="button">Pick element</button>
+            <div class="inline-buttons">
+              <button id="pickerButton" type="button">Pick element</button>
+              <button id="coverageButton" type="button">Show coverage</button>
+              <button id="coverageOffButton" type="button">Hide coverage</button>
+            </div>
           </header>
+          <p id="coverageSummary" class="field-note"></p>
           <div id="pickerOutput" class="card notice"></div>
           <section class="card">
             <div class="card-header">
@@ -246,15 +257,57 @@
             </div>
             <div id="pipesControl" class="stack"></div>
           </section>
+          <section class="card">
+            <div class="card-header">
+              <h3>Routing (Pipes → Event Destinations)</h3>
+              <p>Where events from this source are sent onward, separate from ingestion/Event Types above.</p>
+            </div>
+            <div id="pipesRouting" class="stack"></div>
+          </section>
+          <div class="split">
+            <section class="card">
+              <div class="card-header">
+                <h3>Profile lookup</h3>
+                <button id="profileSearchButton" type="button">Search</button>
+              </div>
+              <label class="field">
+                <span>Identifier type</span>
+                <select id="profileSearchType"></select>
+              </label>
+              <label class="field">
+                <span>Identifier value</span>
+                <input id="profileSearchInput" type="text" spellcheck="false" autocomplete="off">
+              </label>
+              <div id="profileSearchResult" class="stack"></div>
+            </section>
+            <section class="card">
+              <div class="card-header">
+                <h3>Identity resolution simulator</h3>
+                <button id="identitySimButton" type="button">Simulate from captured events</button>
+              </div>
+              <p class="field-note-muted">Approximate local simulation of merge/overflow behavior using this source's identifier rules and limits. Not server state.</p>
+              <div id="identitySimResult" class="stack"></div>
+            </section>
+          </div>
+          <section class="card">
+            <div class="card-header">
+              <h3>Transform regression tests</h3>
+              <button id="runTransformTestsButton" type="button">Run all</button>
+            </div>
+            <p class="field-note-muted">Pin captured events as test cases from the Validation view, then re-run them here after every transform edit.</p>
+            <div id="transformTestsList" class="stack"></div>
+          </section>
           <div class="split">
             <section class="card">
               <div class="card-header">
                 <h3>Tracking rules</h3>
                 <div class="inline-buttons">
                   <button id="generateTrackingRulesButton" type="button">Generate from rules</button>
+                  <button id="generateFromDataLayerButton" type="button">Generate from dataLayer</button>
                   <button id="saveTrackingRulesButton" type="button">Save</button>
                 </div>
               </div>
+              <p id="trackingRulesStatus" class="field-note"></p>
               <textarea id="trackingRulesEditor" spellcheck="false"></textarea>
             </section>
             <section class="card">

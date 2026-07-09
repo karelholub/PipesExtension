@@ -51,6 +51,7 @@ Open the extension popup and click **Options**. The options page supports:
 - Collection endpoint
 - App or project key
 - Prism base URL and Prism API token for direct Pipes configuration from the extension
+- Profile API token (`mppak_...`) and Profile API path (default `/profile-api/extension`) for profile lookups; the token is sent as an `X-API-Token` header against the Prism base URL
 - User ID, with paste support or one-click random UUID generation
 - Global tracking enabled/disabled
 - Debug logging
@@ -62,33 +63,40 @@ Open the extension popup and click **Options**. The options page supports:
 
 When saving a custom endpoint, Chrome may ask for host permission for that endpoint origin. This is required so the service worker can send cross-origin `fetch` POST requests.
 
-The Prism API token is stored in `chrome.storage.local`, not sync storage, so it stays local to the browser profile where the extension is installed.
+The Prism API token and Profile API token are stored in `chrome.storage.local`, not sync storage, so they stay local to the browser profile where the extension is installed.
 
 ## Modes
 
+Each mode now maps to exactly one transport, so a real Pipes source never receives duplicate or conflicting traffic for the same interaction:
+
 `inject_sdk`
 
-Injects the configured SDK source into the page context. The extension still observes events and sends payloads through the service worker, because a generic Meiro SDK API cannot be assumed on every site. If a known global tracking function is detected, the page bridge also attempts to forward events to it.
-
-For Pipes `mpt.js`, the page bridge queues `window.mpt("config", ...)` with the configured collection endpoint, enables tracking rules and web layers/banners, applies granted consent when consent override or sending is allowed, and forwards `page_view` through `window.mpt("event", "page_view", ...)`. This lets SDK-delivered web layer banners evaluate and render in addition to the extension's simulated tracking.
+Injects the configured SDK source into the page context and forwards every captured interaction to it only — the extension's own collector never POSTs to `collection_endpoint` in this mode. If `window.mpt` is present, the page bridge calls `mpt("config", ...)`, applies the configured consent triple when consent override is on, and forwards events via `mpt("event", ...)`. Only event names in the SDK's predefined GA4-style vocabulary (see `GA4_STANDARD_EVENT_NAMES` in `src/shared/constants.js`) are forwarded; custom selector-rule/recipe event types are skipped because the real SDK would reject them client-side. The outcome of each forward attempt (accepted, rejected, or no SDK detected) is still recorded in the debug log/workbench, tagged `sdk_forward`, without any network request from the extension. If no known global tracking function is detected at all, no fallback POST is made — this is intentionally a pure "what would the real SDK actually do" test.
 
 `simulate_only`
 
-Does not inject the external SDK. The content script observes browser and DOM events, builds Meiro/Pipes-style payloads, and sends them directly to the configured collection endpoint through the extension service worker.
+Does not inject the external SDK and never touches `window.mpt`. The content script observes browser and DOM events, builds the extension's own Meiro/Pipes-style payload, and POSTs it directly to `collection_endpoint` through the extension service worker — useful for exercising a webhook-style source's transform function independent of any SDK behavior.
 
 `hybrid`
 
-Injects the SDK and also runs simulated observers. This is the best mode for demos and QA because it gives visibility in the debug log even when the injected SDK behavior is opaque.
+Does both, for side-by-side comparison: the SDK forward attempt (subject to the same standard-vocabulary gating as `inject_sdk`) and the extension's own direct POST. Log entries are tagged with `transport.kind` (`sdk_forward` vs `extension_direct`) and `transport.mode` so the two streams are distinguishable in the debug log and workbench.
+
+## Consent
+
+Consent is modeled as three independent axes, matching the real SDK's `mpt("consent", ...)` contract: `storage_persistence`, `user_id`, and `session_id`, each `granted` or `denied`. Configure them in Options. "Consent override" controls whether the extension declares this consent state to the page's real SDK at all (only relevant in `inject_sdk`/`hybrid` mode); when it's off, the real page's own consent management (CMP) stays in control and the extension does not call `mpt("consent", ...)`. "Sending allowed" is unrelated to the SDK — it only permits the extension's own direct POST transport to run while consent override is off.
 
 ## Captured Events
 
-The extension captures:
+The extension captures, using the real SDK's predefined event names where a direct match exists:
 
 - `page_view` on initial enablement
 - SPA route-change `page_view` events
 - `click`
 - `form_submit`
-- `scroll_depth` at 25, 50, 75, 90, and 100 percent when enabled
+- `scroll` at 25, 50, 75, 90, and 100 percent scroll depth (`custom_payload.depth_percent`) when enabled
+- `file_download` when a clicked link points at a known downloadable file extension
+
+`outbound_link_click`, plus any selector-rule/recipe-driven event type, are extension-specific custom names with no predefined-vocabulary counterpart. They are always included in the extension's own direct POST (useful for testing custom source transforms) but are never forwarded to a real `window.mpt` SDK.
 
 Click payloads include text, element tag, href, id, classes, selector, coordinates, outbound marker, and file download marker.
 
@@ -142,7 +150,16 @@ It includes:
 - Pipes setup queue that summarizes captured Event Types missing from Pipes or recently failing delivery, with one-click definition sync from captured payloads
 - Event Type sync from validation cards, creating missing definitions or additively updating existing definitions with inferred schema and identifier rules
 - Router-side source validation from captured events, so admins can verify whether the Pipes source transform emits valid Event Router events before replaying traffic
-- Inline Event Type management for the resolved source, including JSON Schema and identifier-rule editing
+- Inline Event Type management for the resolved source, including JSON Schema and identifier-rule editing, with delete support (two-step confirm)
+- Identifier type merge/overflow limits (`maxIdentifiers`, `priority`) surfaced directly, instead of just names, so admins can see profile-merge behavior without leaving the extension
+- Event routing visibility: which Pipes (Delivery) route this source's events onward, to which Event Destination, enable/disable toggling, and on-demand delivery inspection — separate from ingestion/Event Types
+- Event journey tracer: a Trace action on validation entries follows one captured event step-by-step — capture, /collect delivery, transform output, Event Type definition, identifier extraction, routing, and recent downstream deliveries — and reports where the journey breaks
+- Profile lookup: query the Pipes Profile API (`identifier_type` + `identifier_value`, type picked from the source's available identifier types, value prefilled with the configured user ID) to confirm identity resolution stitched captured events onto a unified profile
+- Transform regression tests: pin captured payloads as named test cases (snapshotting expected event count/types/identifiers), then re-run the whole suite against the live transform after edits to catch drift
+- Instance health panel in Overview: ingestion queue status, dashboard volume, and error stats from the connected Pipes instance, to explain accepted-but-not-visible situations
+- dataLayer → tracking rules generator: turns observed dataLayer event pushes into on.dataLayer(...) tracking-rule stubs, auto-mapped to predefined Web SDK event names where possible
+- Selector coverage overlay: highlights elements covered by selector rules and tracking-rule selectors (solid green) versus untracked interactive elements (dashed red) directly on the inspected page
+- Identity-resolution simulator: local simulation of the documented merge/overflow algorithm using the source's identifier rules and each identifier type's maxIdentifiers/priority, run against captured events
 - Event Type preview checks that validate the configured JSON Schema and show identifier-rule extraction results against source-test output or recent captured examples before saving to Pipes
 - One-click JSON Schema inference for Event Types from source-test output or recent captured payloads
 - Identifier-rule builder that uses Pipes identifier types and payload-path suggestions so admins can add rules without hand-writing JSON

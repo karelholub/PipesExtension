@@ -10,6 +10,11 @@
     debug: true,
     consent_override: true,
     sending_allowed: true,
+    consent: {
+      storage_persistence: "granted",
+      user_id: "granted",
+      session_id: "granted"
+    },
     mode: "hybrid",
     data_layer_names: ["dataLayer", "digitalData", "utag_data"],
     selector_rules: [],
@@ -98,7 +103,7 @@
       name: "File download",
       description: "Track document or asset downloads from links.",
       rule: {
-        event_type: "file_download_click",
+        event_type: "file_download",
         name: "File download",
         selector: "a[href]",
         text_contains: "",
@@ -137,6 +142,26 @@
     HYBRID: "hybrid"
   });
 
+  // The real Pipes Web SDK (mpt.js) only accepts these predefined GA4-style
+  // event names via mpt('event', name, ...) and rejects anything else with a
+  // console error. Keep this in sync with the identical list hardcoded in
+  // src/injected/page-bridge.js, which cannot reach this shared module because
+  // it runs in the page's own JS world, not the extension's isolated world.
+  const GA4_STANDARD_EVENT_NAMES = Object.freeze([
+    "page_view", "click", "form_start", "form_submit", "scroll", "file_download", "search",
+    "session_start", "first_visit", "user_engagement",
+    "video_start", "video_progress", "video_complete",
+    "add_to_cart", "remove_from_cart", "view_item", "view_item_list", "view_cart",
+    "begin_checkout", "add_shipping_info", "add_payment_info", "purchase", "refund",
+    "select_item", "select_promotion", "view_promotion", "add_to_wishlist",
+    "generate_lead", "qualify_lead", "working_lead", "close_convert_lead",
+    "close_unconvert_lead", "disqualify_lead",
+    "select_content", "share", "login", "sign_up", "join_group", "view_search_results",
+    "tutorial_begin", "tutorial_complete", "level_start", "level_end", "level_up",
+    "post_score", "unlock_achievement", "earn_virtual_currency", "spend_virtual_currency"
+  ]);
+
+  const DEFAULT_PROFILE_API_PATH = "/profile-api/extension";
   const EVENT_VERSION = "1.2.0";
   const LOG_LIMIT = 200;
   const STORAGE_KEYS = Object.freeze({
@@ -146,7 +171,8 @@
     CONTRACTS: "meiro_tracker_contracts",
     PROFILES: "meiro_tracker_profiles",
     ENABLED_TABS: "meiro_tracker_enabled_tabs",
-    PRISM_CONNECTION: "meiro_tracker_prism_connection"
+    PRISM_CONNECTION: "meiro_tracker_prism_connection",
+    TRANSFORM_TESTS: "meiro_tracker_transform_tests"
   });
 
   const SENSITIVE_FIELD_PATTERNS = Object.freeze([
@@ -197,6 +223,8 @@
     DEFAULT_PROFILES,
     DEFAULT_RECIPES,
     MODES,
+    GA4_STANDARD_EVENT_NAMES,
+    DEFAULT_PROFILE_API_PATH,
     EVENT_VERSION,
     LOG_LIMIT,
     STORAGE_KEYS,

@@ -202,6 +202,33 @@
       .filter((field) => field.name || field.id || field.sensitive_excluded);
   }
 
+  function isStandardEventName(eventName) {
+    return shared.GA4_STANDARD_EVENT_NAMES.includes(eventName);
+  }
+
+  function formatTimestamp(value) {
+    if (!value) {
+      return "unknown time";
+    }
+
+    // Stored timestamps are always UTC ISO 8601 (required for the wire payload).
+    // Displaying that raw string reads like the wrong time to anyone outside
+    // UTC, so this renders it in the viewer's own local timezone instead.
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return String(value);
+    }
+
+    return parsed.toLocaleString(undefined, {
+      year: "numeric",
+      month: "short",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit"
+    });
+  }
+
   function debugLog(settings, message, details) {
     if (!settings || !settings.debug) {
       return;
@@ -230,6 +257,8 @@
     isDownloadUrl,
     isSensitiveField,
     inputMetadata,
+    isStandardEventName,
+    formatTimestamp,
     debugLog
   });
 })(globalThis);

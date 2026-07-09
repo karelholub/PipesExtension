@@ -15,10 +15,19 @@
   }
 
   function pagePayload(customPayload) {
+    const url = root.location ? root.location.href : null;
+    const referrer = root.document && root.document.referrer ? root.document.referrer : null;
     return {
       page_title: root.document ? root.document.title : null,
-      page_url: root.location ? root.location.href : null,
-      page_referrer: root.document && root.document.referrer ? root.document.referrer : null,
+      page_url: url,
+      page_referrer: referrer,
+      // The Pipes Web SDK source transform template reads event.payload.url /
+      // event.payload.referrer (for context.url/referrer and the
+      // meiro_mobile_identity query-param lookup), not page_url/page_referrer.
+      // Kept alongside page_url/page_referrer, which this extension's own
+      // contracts/validation/display code already depends on.
+      url,
+      referrer,
       custom_payload: customPayload || {}
     };
   }
@@ -79,7 +88,9 @@
   }
 
   function buildScrollDepth(identity, settings, depthPercent) {
-    return baseEvent("scroll_depth", identity, settings, pagePayload({
+    // "scroll" is the real Web SDK's predefined event name (see GA4_STANDARD_EVENT_NAMES);
+    // depth_percent is extension-specific detail carried in custom_payload.
+    return baseEvent("scroll", identity, settings, pagePayload({
       depth_percent: depthPercent
     }));
   }

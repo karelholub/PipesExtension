@@ -143,7 +143,7 @@
 
     return [
       { label: "Tracking enabled", ok: Boolean(settings.tracking_enabled), detail: settings.tracking_enabled ? "Global sending is enabled." : "Global sending is disabled." },
-      { label: "Tab live", ok: Boolean(page && page.active), detail: page && page.active ? `Live collection started at ${page.started_at || "unknown time"}.` : "This page is not currently collecting live signals." },
+      { label: "Tab live", ok: Boolean(page && page.active), detail: page && page.active ? `Live collection started at ${shared.formatTimestamp(page.started_at)}.` : "This page is not currently collecting live signals." },
       { label: "Endpoint configured", ok: shared.isValidHttpUrl(settings.collection_endpoint), detail: settings.collection_endpoint || "Missing endpoint." },
       { label: "User ID configured", ok: Boolean(settings.user_id), detail: settings.user_id || "Missing user_id." },
       { label: "SDK configured", ok: shared.isValidHttpUrl(settings.sdk_source_url), detail: settings.sdk_source_url || "Missing SDK URL." },
@@ -186,7 +186,272 @@
     if (entry && entry.status && entry.status >= 400) {
       suggestions.push("Inspect the endpoint response and compare the payload against the Event Router contract.");
     }
+    if (entry && entry.event_type && shared.GA4_STANDARD_EVENT_NAMES && !shared.GA4_STANDARD_EVENT_NAMES.includes(entry.event_type)) {
+      suggestions.push(`"${entry.event_type}" is not in the Web SDK's predefined event vocabulary. It will not be forwarded to a real mpt.js SDK in inject_sdk/hybrid mode.`);
+    }
     return suggestions;
+  }
+
+  function inferJsonSchemaFromSample(value) {
+    if (Array.isArray(value)) {
+      const firstDefined = value.find((item) => item !== undefined);
+      return {
+        type: "array",
+        items: firstDefined === undefined ? {} : inferJsonSchemaFromSample(firstDefined)
+      };
+    }
+    if (value && typeof value === "object") {
+      const properties = {};
+      Object.entries(value).forEach(([key, childValue]) => {
+        properties[key] = inferJsonSchemaFromSample(childValue);
+      });
+      return {
+        type: "object",
+        properties
+      };
+    }
+    if (typeof value === "number") {
+      return { type: Number.isInteger(value) ? "integer" : "number" };
+    }
+    if (typeof value === "boolean") {
+      return { type: "boolean" };
+    }
+    if (value === null) {
+      return { type: "null" };
+    }
+    return { type: "string" };
+  }
+
+  function normalizeJsonSchemaTypeValue(value) {
+    if (Array.isArray(value)) {
+      return value.map(normalizeJsonSchemaTypeValue);
+    }
+    if (!value) {
+      return value;
+    }
+    const type = String(value).toLowerCase();
+    return type === "integer" || type === "number" || type === "string" || type === "boolean" || type === "object" || type === "array" || type === "null"
+      ? type
+      : value;
+  }
+
+  function normalizeJsonSchemaTypes(schema) {
+    if (schema === null || schema === undefined) {
+      return schema;
+    }
+    if (Array.isArray(schema)) {
+      return schema.map(normalizeJsonSchemaTypes);
+    }
+    if (!schema || typeof schema !== "object") {
+      return schema;
+    }
+
+    const normalized = {};
+    Object.entries(schema).forEach(([key, value]) => {
+      normalized[key] = key === "type" ? normalizeJsonSchemaTypeValue(value) : normalizeJsonSchemaTypes(value);
+    });
+    return normalized;
+  }
+
+  // Local implementation of the documented Pipes identity-resolution
+  // algorithm (merge on shared identifiers, maxIdentifiers limits, priority
+  // picks the winner, overflow profiles on limit violations). Input is a
+  // sequence of events' identifier sets: [{event_type, identifiers: [{type, value}]}].
+  // This is a simulation for admin insight, not a mirror of server state.
+  function simulateIdentityResolution(eventIdentifierSets, identifierTypes) {
+    const typeConfig = {};
+    (identifierTypes || []).forEach((item) => {
+      typeConfig[item.name] = {
+        max: item.maxIdentifiers === null || item.maxIdentifiers === undefined ? Infinity : item.maxIdentifiers,
+        priority: item.priority === null || item.priority === undefined ? 0 : item.priority
+      };
+    });
+
+    const profiles = [];
+    const log = [];
+
+    function profileHas(profile, type, value) {
+      return profile.identifiers.some((item) => item.type === type && item.value === value);
+    }
+
+    function countByType(identifierList) {
+      const counts = {};
+      identifierList.forEach((item) => {
+        const key = `${item.type}::${item.value}`;
+        if (!counts[item.type]) {
+          counts[item.type] = new Set();
+        }
+        counts[item.type].add(key);
+      });
+      return counts;
+    }
+
+    function violatesLimits(identifierList) {
+      const counts = countByType(identifierList);
+      return Object.keys(counts).find((type) => {
+        const config = typeConfig[type] || { max: Infinity };
+        return counts[type].size > config.max;
+      }) || null;
+    }
+
+    (eventIdentifierSets || []).forEach((eventSet, eventIndex) => {
+      const identifiers = (eventSet.identifiers || []).filter((item) => item && item.type && item.value !== undefined && item.value !== null && item.value !== "");
+      if (!identifiers.length) {
+        log.push({ event: eventIndex, event_type: eventSet.event_type, action: "skipped", detail: "No identifiers extracted." });
+        return;
+      }
+
+      const matched = profiles.filter((profile) => identifiers.some((item) => profileHas(profile, item.type, item.value)));
+
+      if (!matched.length) {
+        profiles.push({ id: profiles.length + 1, identifiers: identifiers.slice(), overflow: false });
+        log.push({ event: eventIndex, event_type: eventSet.event_type, action: "created", detail: `New profile ${profiles.length} with ${identifiers.length} identifier(s).` });
+        return;
+      }
+
+      const union = [];
+      matched.forEach((profile) => profile.identifiers.forEach((item) => {
+        if (!union.some((existing) => existing.type === item.type && existing.value === item.value)) {
+          union.push(item);
+        }
+      }));
+      identifiers.forEach((item) => {
+        if (!union.some((existing) => existing.type === item.type && existing.value === item.value)) {
+          union.push(item);
+        }
+      });
+
+      const violatedType = violatesLimits(union);
+      if (!violatedType) {
+        const winner = matched[0];
+        winner.identifiers = union;
+        matched.slice(1).forEach((loser) => {
+          const index = profiles.indexOf(loser);
+          if (index >= 0) {
+            profiles.splice(index, 1);
+          }
+        });
+        log.push({
+          event: eventIndex,
+          event_type: eventSet.event_type,
+          action: matched.length > 1 ? "merged" : "updated",
+          detail: matched.length > 1
+            ? `Merged ${matched.length} profiles into profile ${winner.id}.`
+            : `Added identifiers to profile ${winner.id}.`
+        });
+        return;
+      }
+
+      // Limit violated: pick the winner via the highest-priority matched
+      // identifier type; other matched profiles stay untouched; identifiers
+      // that would exceed the winner's limits overflow to a new profile.
+      const winner = matched
+        .map((profile) => ({
+          profile,
+          priority: Math.max(...identifiers
+            .filter((item) => profileHas(profile, item.type, item.value))
+            .map((item) => (typeConfig[item.type] || { priority: 0 }).priority))
+        }))
+        .sort((left, right) => right.priority - left.priority)[0].profile;
+
+      const overflowIdentifiers = [];
+      identifiers.forEach((item) => {
+        if (profileHas(winner, item.type, item.value)) {
+          return;
+        }
+        const candidate = winner.identifiers.concat([item]);
+        if (violatesLimits(candidate)) {
+          overflowIdentifiers.push(item);
+        } else {
+          winner.identifiers.push(item);
+        }
+      });
+
+      if (overflowIdentifiers.length) {
+        profiles.push({ id: profiles.length + 1, identifiers: overflowIdentifiers, overflow: true });
+        log.push({
+          event: eventIndex,
+          event_type: eventSet.event_type,
+          action: "overflow",
+          detail: `Limit on '${violatedType}' blocked a merge; ${overflowIdentifiers.length} identifier(s) overflowed to new profile ${profiles.length}.`
+        });
+      } else {
+        log.push({ event: eventIndex, event_type: eventSet.event_type, action: "updated", detail: `Added identifiers to winning profile ${winner.id} without overflow.` });
+      }
+    });
+
+    return {
+      profiles: profiles.map((profile) => ({
+        id: profile.id,
+        overflow: profile.overflow,
+        identifiers: profile.identifiers.map((item) => `${item.type}=${String(item.value).slice(0, 60)}`)
+      })),
+      log,
+      overflow_count: profiles.filter((profile) => profile.overflow).length
+    };
+  }
+
+  function camelToSnakeCase(value) {
+    return String(value || "")
+      .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+      .replace(/[\s-]+/g, "_")
+      .toLowerCase();
+  }
+
+  function extractDataLayerEventNames(pushes) {
+    const names = new Set();
+    (pushes || []).forEach((push) => {
+      (push.entries || []).forEach((entry) => {
+        if (entry && typeof entry === "object" && typeof entry.event === "string" && entry.event.trim()) {
+          names.add(entry.event.trim());
+        }
+      });
+    });
+    return Array.from(names);
+  }
+
+  function summarizeSourceTestResult(result) {
+    const validation = result && result.validation ? result.validation : {};
+    const eventResults = Array.isArray(validation.eventResults) ? validation.eventResults : [];
+    const errors = [];
+    if (Array.isArray(validation.errors)) {
+      errors.push(...validation.errors.map((item) => String(item)));
+    }
+    eventResults.forEach((item) => {
+      if (Array.isArray(item.errors) && item.errors.length) {
+        errors.push(...item.errors.map((error) => `event ${item.index}: ${String(error)}`));
+      }
+    });
+
+    const eventCount = Array.isArray(result && result.events) ? result.events.length : eventResults.length;
+    // A clean HTTP response with 0 emitted events is not a real pass: either the
+    // transform silently dropped this payload, the test payload's shape doesn't
+    // match what the transform expects (e.g. Pipes Web SDK sources require the
+    // /collect body to be an array of events, not a single object), or the
+    // transform has a bug. Flag it instead of showing the same PASS state as a
+    // run that actually verified something.
+    if (eventCount === 0) {
+      errors.push("Transform emitted 0 events for this test payload. Check whether the payload shape matches what the transform expects (Pipes Web SDK sources expect an array of events), or whether it's being intentionally filtered.");
+    }
+
+    return {
+      ok: Boolean(result && result.ok && validation.ok !== false && errors.length === 0),
+      event_count: eventCount,
+      valid_event_count: eventResults.filter((item) => item.ok !== false).length,
+      event_types: eventResults.map((item) => item.eventType).filter(Boolean),
+      identifier_count: eventResults.reduce((count, item) => count + (Array.isArray(item.identifiers) ? item.identifiers.length : 0), 0),
+      errors
+    };
+  }
+
+  function extractTrackedEventNames(trackingRulesCode) {
+    const matches = String(trackingRulesCode || "").matchAll(/sdk\.track\(\s*["']([^"']+)["']/g);
+    return Array.from(new Set(Array.from(matches, (match) => match[1])));
+  }
+
+  function findNonStandardTrackedEventNames(trackingRulesCode, standardNames) {
+    const allowed = standardNames || (shared.GA4_STANDARD_EVENT_NAMES || []);
+    return extractTrackedEventNames(trackingRulesCode).filter((name) => !allowed.includes(name));
   }
 
   function summarizeValidationEntry(entry) {
@@ -428,6 +693,15 @@
     buildTimeline,
     summarizeWebLayers,
     webLayerLabel,
-    diffEvents
+    diffEvents,
+    simulateIdentityResolution,
+    camelToSnakeCase,
+    extractDataLayerEventNames,
+    summarizeSourceTestResult,
+    extractTrackedEventNames,
+    findNonStandardTrackedEventNames,
+    inferJsonSchemaFromSample,
+    normalizeJsonSchemaTypeValue,
+    normalizeJsonSchemaTypes
   });
 })(globalThis);

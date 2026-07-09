@@ -36,7 +36,17 @@
 
         <label>
           <span>Prism API token</span>
-          <input id="prismToken" name="prism_token" type="password" autocomplete="off" spellcheck="false" placeholder="Stored locally only">
+          <input id="prismToken" name="prism_token" type="password" autocomplete="off" spellcheck="false" placeholder="mpat_... — stored locally only">
+        </label>
+
+        <label>
+          <span>Profile API token</span>
+          <input id="profileApiToken" name="profile_api_token" type="password" autocomplete="off" spellcheck="false" placeholder="mppak_... — stored locally only">
+        </label>
+
+        <label>
+          <span>Profile API path</span>
+          <input id="profileApiPath" name="profile_api_path" type="text" autocomplete="off" spellcheck="false" placeholder="/profile-api/extension">
         </label>
 
         <label>
@@ -55,6 +65,11 @@
             <option value="hybrid">Hybrid</option>
           </select>
         </label>
+        <p class="hint">
+          <strong>Inject SDK</strong>: only the real <code>mpt.js</code> on the page sends events (nothing extra hits your endpoint).
+          <strong>Simulate only</strong>: only the extension's own direct POST is sent; the SDK is never touched.
+          <strong>Hybrid</strong>: both, clearly labeled in the debug log, for side-by-side comparison.
+        </p>
 
         <div class="toggles">
           <label><input id="trackingEnabled" name="tracking_enabled" type="checkbox"> Enable tracking globally</label>
@@ -65,6 +80,35 @@
           <label><input id="captureScrollDepth" name="capture_scroll_depth" type="checkbox"> Capture scroll depth</label>
           <label><input id="captureOutboundClicks" name="capture_outbound_clicks" type="checkbox"> Mark outbound link clicks</label>
           <label><input id="captureFileDownloads" name="capture_file_downloads" type="checkbox"> Mark file downloads</label>
+        </div>
+        <p class="hint">
+          "Consent override" declares consent to the page's real SDK on your behalf, using the three values below
+          (only relevant in Inject SDK / Hybrid mode). "Sending allowed" only controls the extension's own direct
+          POST and never changes what the real SDK is told.
+        </p>
+
+        <div class="consent-grid">
+          <label>
+            <span>Storage persistence</span>
+            <select id="consentStoragePersistence">
+              <option value="granted">Granted</option>
+              <option value="denied">Denied</option>
+            </select>
+          </label>
+          <label>
+            <span>User ID</span>
+            <select id="consentUserId">
+              <option value="granted">Granted</option>
+              <option value="denied">Denied</option>
+            </select>
+          </label>
+          <label>
+            <span>Session ID</span>
+            <select id="consentSessionId">
+              <option value="granted">Granted</option>
+              <option value="denied">Denied</option>
+            </select>
+          </label>
         </div>
 
         <div class="actions">

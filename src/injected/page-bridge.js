@@ -5,6 +5,23 @@
     return;
   }
 
+  // Mirrors GA4_STANDARD_EVENT_NAMES in src/shared/constants.js. Duplicated
+  // (not shared) because this file is injected as a real <script> tag and runs
+  // in the page's own JS world, isolated from the extension's shared modules.
+  const STANDARD_EVENT_NAMES = [
+    "page_view", "click", "form_start", "form_submit", "scroll", "file_download", "search",
+    "session_start", "first_visit", "user_engagement",
+    "video_start", "video_progress", "video_complete",
+    "add_to_cart", "remove_from_cart", "view_item", "view_item_list", "view_cart",
+    "begin_checkout", "add_shipping_info", "add_payment_info", "purchase", "refund",
+    "select_item", "select_promotion", "view_promotion", "add_to_wishlist",
+    "generate_lead", "qualify_lead", "working_lead", "close_convert_lead",
+    "close_unconvert_lead", "disqualify_lead",
+    "select_content", "share", "login", "sign_up", "join_group", "view_search_results",
+    "tutorial_begin", "tutorial_complete", "level_start", "level_end", "level_up",
+    "post_score", "unlock_achievement", "earn_virtual_currency", "spend_virtual_currency"
+  ];
+
   const state = {
     sdkSourceUrl: null,
     sdkInjected: false,
@@ -12,6 +29,7 @@
     sdkConfigSignature: null,
     collectionEndpoint: null,
     enableWebLayers: true,
+    consent: null,
     debug: false,
     dataLayerNames: [],
     watchedDataLayers: new Set(),
@@ -76,7 +94,8 @@
     const signature = JSON.stringify({
       collectionEndpoint: detail.collectionEndpoint,
       enableWebLayers: detail.enableWebLayers !== false,
-      consentAllowed: Boolean(detail.consentOverride || detail.sendingAllowed)
+      consentOverride: Boolean(detail.consentOverride),
+      consent: detail.consent || null
     });
     if (state.sdkConfigSignature === signature) {
       return;
@@ -95,12 +114,13 @@
     }
 
     mpt("config", config);
-    if (detail.consentOverride || detail.sendingAllowed) {
-      mpt("consent", {
-        storage_persistence: "granted",
-        user_id: "granted",
-        session_id: "granted"
-      });
+    // consent_override means "let the extension declare consent on behalf of the
+    // page's SDK for testing". sendingAllowed only controls the extension's own
+    // direct POST transport (see service-worker.js) and must not, by itself,
+    // cause the real SDK's consent state to change.
+    if (detail.consentOverride) {
+      state.consent = detail.consent || { storage_persistence: "granted", user_id: "granted", session_id: "granted" };
+      mpt("consent", state.consent);
     }
 
     state.collectionEndpoint = detail.collectionEndpoint;
@@ -134,11 +154,19 @@
     }
   }
 
+  // Mirrors PII_PATTERNS/isLikelyPhoneValue in src/shared/admin-utils.js.
+  // Duplicated (not shared) because this file runs in the page's own JS world,
+  // isolated from the extension's shared modules — see STANDARD_EVENT_NAMES above.
   function redactText(value) {
     return String(value || "")
       .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "[redacted:email]")
       .replace(/\b(?:\d[ -]*?){13,19}\b/g, "[redacted:credit_card]")
-      .replace(/\b(?:bearer|token|secret|apikey|api_key)\b/gi, "[redacted:token]");
+      .replace(/\b\d{3}-\d{2}-\d{4}\b/g, "[redacted:ssn]")
+      .replace(/\b(?:bearer|token|secret|apikey|api_key)\b/gi, "[redacted:token]")
+      .replace(/(?:\+?\d[\d .()-]{7,}\d)/g, (match) => {
+        const digits = match.replace(/\D/g, "");
+        return digits.length >= 8 && digits.length <= 15 && /[+(). -]/.test(match) ? "[redacted:phone]" : match;
+      });
   }
 
   function isTrackingUrl(url) {
@@ -506,18 +534,36 @@
   }
 
   function callPotentialSdkApi(eventPayload) {
-    // This is intentionally best-effort. Replace or extend these candidates
-    // when the exact Meiro SDK browser API is known for a target deployment.
+    const eventType = eventPayload.type;
+
     if (typeof window.mpt === "function") {
+      // The real mpt.js only accepts the predefined GA4-style vocabulary and
+      // rejects anything else with a console error, so non-standard names
+      // (custom selector-rule/recipe event types) are never handed to it.
+      if (!STANDARD_EVENT_NAMES.includes(eventType)) {
+        debug("Skipped forwarding non-standard event name to Pipes SDK", eventType);
+        return {
+          attempted: true,
+          ok: false,
+          sdk: "mpt",
+          reason: `"${eventType}" is not in the Web SDK's predefined event vocabulary; the real SDK would reject it.`
+        };
+      }
+
       try {
-        window.mpt("event", eventPayload.type, (eventPayload.payload && eventPayload.payload.custom_payload) || eventPayload.payload || {});
-        debug("Forwarded event to Pipes SDK mpt API", eventPayload.type);
-        return true;
+        window.mpt("event", eventType, (eventPayload.payload && eventPayload.payload.custom_payload) || eventPayload.payload || {});
+        debug("Forwarded event to Pipes SDK mpt API", eventType);
+        return { attempted: true, ok: true, sdk: "mpt" };
       } catch (error) {
         debug("Pipes SDK mpt API rejected event", error);
+        return { attempted: true, ok: false, sdk: "mpt", reason: error && error.message ? error.message : "mpt() threw an error." };
       }
     }
 
+    // This generic fallback is intentionally best-effort for deployments with
+    // no window.mpt. Replace or extend these candidates when the exact Meiro
+    // SDK browser API is known for a target deployment; their contract is
+    // unknown, so the standard-vocabulary restriction above does not apply.
     const candidates = [
       window.MeiroEvents && window.MeiroEvents.track,
       window.Meiro && window.Meiro.track,
@@ -527,21 +573,21 @@
     ].filter((candidate) => typeof candidate === "function");
 
     if (!candidates.length) {
-      debug("No generic SDK track API detected; extension transport will be used.", eventPayload.type);
-      return false;
+      debug("No generic SDK track API detected; extension transport will be used.", eventType);
+      return { attempted: false, ok: false, sdk: "none", reason: "No window.mpt or known tracker global detected." };
     }
 
     for (const track of candidates) {
       try {
-        track.call(window, eventPayload.type, eventPayload.payload);
-        debug("Forwarded event to detected SDK API", eventPayload.type);
-        return true;
+        track.call(window, eventType, eventPayload.payload);
+        debug("Forwarded event to detected SDK API", eventType);
+        return { attempted: true, ok: true, sdk: "candidate" };
       } catch (error) {
         debug("Detected SDK API rejected event", error);
       }
     }
 
-    return false;
+    return { attempted: true, ok: false, sdk: "candidate", reason: "All detected candidate SDK APIs threw an error." };
   }
 
   window.addEventListener("popstate", () => dispatchRouteChange("popstate"));
@@ -566,7 +612,11 @@
   });
 
   window.addEventListener("meiro-extension:sdk-event", (event) => {
-    callPotentialSdkApi(event.detail);
+    const detail = event.detail || {};
+    const result = callPotentialSdkApi(detail);
+    window.dispatchEvent(new CustomEvent("meiro-extension:sdk-forward-result", {
+      detail: Object.assign({ requestId: detail.requestId }, result)
+    }));
   });
 
   window.addEventListener("meiro-extension:diagnostics-request", (event) => {
