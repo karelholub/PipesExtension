@@ -13,6 +13,8 @@
     routeTimer: null,
     dataLayerPushes: [],
     requestSignals: [],
+    webLayerSignals: [],
+    initialPageViewSent: false,
     pickerSelection: null,
     pickerCleanup: null
   };
@@ -82,11 +84,18 @@
     state.scrollDepthsSent = new Set();
     state.dataLayerPushes = [];
     state.requestSignals = [];
+    state.webLayerSignals = [];
+    state.initialPageViewSent = false;
 
-    installPageBridge(configurePageBridge);
-    setTimeout(configurePageBridge, 100);
+    installPageBridge(() => {
+      configurePageBridge();
+      sendInitialPageView();
+    });
+    setTimeout(() => {
+      configurePageBridge();
+      sendInitialPageView();
+    }, 100);
     installObservers();
-    sendPayload(shared.buildPageView(state.identity, state.settings, { route_change: false }));
     shared.debugLog(state.settings, "Tracking started", state.settings);
   }
 
@@ -139,10 +148,23 @@
         debug: state.settings.debug,
         injectSdk,
         sdkSourceUrl: state.settings.sdk_source_url,
+        collectionEndpoint: state.settings.collection_endpoint,
+        consentOverride: state.settings.consent_override,
+        sendingAllowed: state.settings.sending_allowed,
+        enableWebLayers: state.settings.enable_web_layers !== false,
         dataLayerNames: state.settings.data_layer_names || [],
         observeTrackingRequests: state.settings.observe_tracking_requests !== false
       }
     }));
+  }
+
+  function sendInitialPageView() {
+    if (!state.active || state.initialPageViewSent) {
+      return;
+    }
+
+    state.initialPageViewSent = true;
+    sendPayload(shared.buildPageView(state.identity, state.settings, { route_change: false }));
   }
 
   function installObservers() {
@@ -231,12 +253,19 @@
       shared.debugLog(state.settings, "Tracking request", event.detail);
     };
 
+    const onWebLayerSignal = (event) => {
+      state.webLayerSignals.unshift(event.detail);
+      state.webLayerSignals = state.webLayerSignals.slice(0, 120);
+      shared.debugLog(state.settings, "Web layer signal", event.detail);
+    };
+
     document.addEventListener("click", onClick, true);
     document.addEventListener("submit", onSubmit, true);
     root.addEventListener("meiro-extension:route-change", onRouteChange);
     root.addEventListener("scroll", onScroll, { passive: true });
     root.addEventListener("meiro-extension:datalayer-push", onDataLayerPush);
     root.addEventListener("meiro-extension:tracking-request", onTrackingRequest);
+    root.addEventListener("meiro-extension:web-layer-signal", onWebLayerSignal);
 
     state.cleanup.push(() => document.removeEventListener("click", onClick, true));
     state.cleanup.push(() => document.removeEventListener("submit", onSubmit, true));
@@ -244,6 +273,7 @@
     state.cleanup.push(() => root.removeEventListener("scroll", onScroll));
     state.cleanup.push(() => root.removeEventListener("meiro-extension:datalayer-push", onDataLayerPush));
     state.cleanup.push(() => root.removeEventListener("meiro-extension:tracking-request", onTrackingRequest));
+    state.cleanup.push(() => root.removeEventListener("meiro-extension:web-layer-signal", onWebLayerSignal));
   }
 
   function evaluateSelectorRules(element, event) {
@@ -374,6 +404,10 @@
         timestamp: new Date(performance.timeOrigin + entry.startTime).toISOString()
       }));
 
+    const webLayerResources = networkResources
+      .filter((entry) => /web[-_]?layer|banner|popup|campaign|personalization|personalisation/i.test(entry.name))
+      .map((entry) => Object.assign({ signal_type: "resource", status: "loaded" }, entry));
+
     const consent = {
       has_tcfapi: typeof root.__tcfapi === "function",
       has_onetrust: Boolean(root.OneTrust),
@@ -393,6 +427,7 @@
       interactive,
       data_layer_pushes: state.dataLayerPushes,
       request_signals: state.requestSignals,
+      web_layer_signals: mergeWebLayerSignals(state.webLayerSignals, diagnostics, webLayerResources),
       picker_selection: state.pickerSelection,
       sdk_diagnostics: diagnostics,
       sources: {
@@ -403,9 +438,32 @@
         meta_tags: metaTags,
         network_resources: networkResources,
         tracking_requests: state.requestSignals,
+        web_layers: mergeWebLayerSignals(state.webLayerSignals, diagnostics, webLayerResources),
         consent
       }
     };
+  }
+
+  function mergeWebLayerSignals(contentSignals, diagnostics, resources) {
+    const pageSignals = diagnostics && Array.isArray(diagnostics.web_layer_signals) ? diagnostics.web_layer_signals : [];
+    const seen = new Set();
+    return (contentSignals || [])
+      .concat(pageSignals)
+      .concat(resources || [])
+      .filter((signal) => {
+        const key = [
+          signal.signal_type,
+          signal.status,
+          signal.url || signal.name || signal.selector || "",
+          signal.timestamp || ""
+        ].join("|");
+        if (seen.has(key)) {
+          return false;
+        }
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 120);
   }
 
   function readStorage(storage) {

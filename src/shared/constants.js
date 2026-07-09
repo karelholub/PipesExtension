@@ -14,6 +14,7 @@
     data_layer_names: ["dataLayer", "digitalData", "utag_data"],
     selector_rules: [],
     observe_tracking_requests: true,
+    enable_web_layers: true,
     capture_scroll_depth: true,
     capture_outbound_clicks: true,
     capture_file_downloads: true

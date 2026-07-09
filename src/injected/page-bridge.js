@@ -8,10 +8,17 @@
   const state = {
     sdkSourceUrl: null,
     sdkInjected: false,
+    sdkConfigured: false,
+    sdkConfigSignature: null,
+    collectionEndpoint: null,
+    enableWebLayers: true,
     debug: false,
     dataLayerNames: [],
     watchedDataLayers: new Set(),
-    requestObserverInstalled: false
+    requestObserverInstalled: false,
+    webLayerObserverInstalled: false,
+    webLayerSignals: [],
+    webLayerSignalKeys: new Set()
   };
 
   function debug(message, details) {
@@ -50,6 +57,59 @@
     };
   }
 
+  function ensureMptQueue() {
+    if (typeof window.mpt === "function") {
+      return window.mpt;
+    }
+
+    window.mpt = function queuedMptCommand() {
+      (window.mpt.q = window.mpt.q || []).push(Array.prototype.slice.call(arguments));
+    };
+    return window.mpt;
+  }
+
+  function configurePipesSdk(detail) {
+    if (!detail || !detail.injectSdk || !detail.collectionEndpoint) {
+      return;
+    }
+
+    const signature = JSON.stringify({
+      collectionEndpoint: detail.collectionEndpoint,
+      enableWebLayers: detail.enableWebLayers !== false,
+      consentAllowed: Boolean(detail.consentOverride || detail.sendingAllowed)
+    });
+    if (state.sdkConfigSignature === signature) {
+      return;
+    }
+
+    const mpt = ensureMptQueue();
+    const config = {
+      collection_endpoint: detail.collectionEndpoint,
+      link_tracking: { enabled: true },
+      tracking_rules: { enabled: true }
+    };
+
+    if (detail.enableWebLayers !== false) {
+      config.web_layers = { enabled: true };
+      config.web_banners = { enabled: true };
+    }
+
+    mpt("config", config);
+    if (detail.consentOverride || detail.sendingAllowed) {
+      mpt("consent", {
+        storage_persistence: "granted",
+        user_id: "granted",
+        session_id: "granted"
+      });
+    }
+
+    state.collectionEndpoint = detail.collectionEndpoint;
+    state.enableWebLayers = detail.enableWebLayers !== false;
+    state.sdkConfigured = true;
+    state.sdkConfigSignature = signature;
+    debug("Pipes SDK configured", config);
+  }
+
   function injectSdk(url) {
     if (!url || state.sdkInjected) {
       return;
@@ -83,6 +143,10 @@
 
   function isTrackingUrl(url) {
     return /collect|analytics|gtm|segment|rudder|amplitude|mixpanel|clarity|facebook|doubleclick|meiro|pipes|mparticle|snowplow/i.test(String(url || ""));
+  }
+
+  function isWebLayerUrl(url) {
+    return /meiro|pipes|web[-_]?layer|banner|popup|campaign|personalization|personalisation/i.test(String(url || ""));
   }
 
   function bodySummary(body) {
@@ -123,6 +187,25 @@
     }));
   }
 
+  function recordWebLayerSignal(signal) {
+    const detail = Object.assign({ timestamp: new Date().toISOString() }, signal);
+    const key = [
+      detail.signal_type,
+      detail.status,
+      detail.url || detail.name || detail.selector || "",
+      detail.http_status || ""
+    ].join("|");
+    if (state.webLayerSignalKeys.has(key)) {
+      return;
+    }
+    state.webLayerSignalKeys.add(key);
+    state.webLayerSignals.unshift(detail);
+    state.webLayerSignals = state.webLayerSignals.slice(0, 120);
+    window.dispatchEvent(new CustomEvent("meiro-extension:web-layer-signal", {
+      detail
+    }));
+  }
+
   function installRequestObserver() {
     if (state.requestObserverInstalled) {
       return;
@@ -152,6 +235,18 @@
               response_preview: responsePreview
             });
           }
+          if (isWebLayerUrl(url)) {
+            recordWebLayerSignal({
+              signal_type: "request",
+              status: response.ok ? "served" : "failed",
+              transport: "fetch",
+              url,
+              host: (() => { try { return new URL(url, location.href).host; } catch (_error) { return ""; } })(),
+              method,
+              http_status: response.status,
+              duration_ms: Date.now() - startedAt
+            });
+          }
           return response;
         } catch (error) {
           if (isTrackingUrl(url)) {
@@ -166,6 +261,19 @@
               request_bytes: requestBody.bytes,
               request_body_preview: requestBody.preview,
               response_preview: error && error.message ? error.message : "fetch error"
+            });
+          }
+          if (isWebLayerUrl(url)) {
+            recordWebLayerSignal({
+              signal_type: "request",
+              status: "failed",
+              transport: "fetch",
+              url,
+              host: (() => { try { return new URL(url, location.href).host; } catch (_error) { return ""; } })(),
+              method,
+              http_status: null,
+              duration_ms: Date.now() - startedAt,
+              error: error && error.message ? error.message : "fetch error"
             });
           }
           throw error;
@@ -204,6 +312,18 @@
           request_body_preview: summary.preview,
           response_preview: redactText(String(this.responseText || "").slice(0, 300))
         });
+        if (isWebLayerUrl(metadata.url)) {
+          recordWebLayerSignal({
+            signal_type: "request",
+            status: this.status >= 200 && this.status < 400 ? "served" : "failed",
+            transport: "xhr",
+            url: metadata.url,
+            host: (() => { try { return new URL(metadata.url, location.href).host; } catch (_error) { return ""; } })(),
+            method: metadata.method,
+            http_status: this.status || null,
+            duration_ms: Date.now() - metadata.startedAt
+          });
+        }
       }, { once: true });
 
       return originalSend.apply(this, arguments);
@@ -211,6 +331,74 @@
 
     state.requestObserverInstalled = true;
     debug("Tracking request observer installed");
+  }
+
+  function installWebLayerObserver() {
+    if (state.webLayerObserverInstalled || !state.enableWebLayers) {
+      return;
+    }
+
+    const observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        Array.from(mutation.addedNodes || []).forEach(scanWebLayerElement);
+      });
+    });
+
+    observer.observe(document.documentElement || document, { childList: true, subtree: true });
+    Array.from(document.querySelectorAll("[id], [class], [src], [href], [data-meiro], [data-testid]")).slice(0, 300).forEach(scanWebLayerElement);
+    state.webLayerObserverInstalled = true;
+    debug("Web layer DOM observer installed");
+  }
+
+  function scanWebLayerElement(node) {
+    if (!node || node.nodeType !== Node.ELEMENT_NODE) {
+      return;
+    }
+    const element = node;
+    const haystack = [
+      element.id,
+      element.className,
+      element.getAttribute && element.getAttribute("data-testid"),
+      element.getAttribute && element.getAttribute("data-meiro"),
+      element.getAttribute && element.getAttribute("src"),
+      element.getAttribute && element.getAttribute("href"),
+      element.getAttribute && element.getAttribute("style")
+    ].filter(Boolean).join(" ");
+    const descendants = element.querySelectorAll ? Array.from(element.querySelectorAll("[id], [class], [src], [href], [data-meiro], [data-testid]")).slice(0, 5) : [];
+    const descendantText = descendants.map((item) => [
+      item.id,
+      item.className,
+      item.getAttribute("src"),
+      item.getAttribute("href"),
+      item.getAttribute("data-meiro"),
+      item.getAttribute("data-testid")
+    ].filter(Boolean).join(" ")).join(" ");
+    if (!/meiro|mpt|web[-_]?layer|banner|popup|campaign/i.test(`${haystack} ${descendantText}`)) {
+      return;
+    }
+
+    recordWebLayerSignal({
+      signal_type: "dom",
+      status: "rendered",
+      selector: describeElement(element),
+      tag: element.tagName ? element.tagName.toLowerCase() : null,
+      text_preview: redactText(String(element.textContent || "").replace(/\s+/g, " ").trim().slice(0, 160))
+    });
+  }
+
+  function describeElement(element) {
+    if (!element || !element.tagName) {
+      return null;
+    }
+
+    const tag = element.tagName.toLowerCase();
+    if (element.id) {
+      return `${tag}#${String(element.id).replace(/[^a-zA-Z0-9_-]/g, "\\$&")}`;
+    }
+
+    const className = typeof element.className === "string" ? element.className : "";
+    const classes = className.split(/\s+/).filter(Boolean).slice(0, 2).map((item) => `.${item.replace(/[^a-zA-Z0-9_-]/g, "\\$&")}`).join("");
+    return `${tag}${classes}`;
   }
 
   function inspectDataLayer(name) {
@@ -260,6 +448,10 @@
       title: document.title,
       sdk_source_url: state.sdkSourceUrl,
       sdk_injected_by_extension: state.sdkInjected,
+      sdk_configured_by_extension: state.sdkConfigured,
+      collection_endpoint: state.collectionEndpoint,
+      web_layers_enabled: state.enableWebLayers,
+      web_layer_signals: state.webLayerSignals,
       sdk_globals: sdkGlobals,
       tracker_globals: trackerGlobals,
       sdk_scripts: sdkScripts,
@@ -316,6 +508,16 @@
   function callPotentialSdkApi(eventPayload) {
     // This is intentionally best-effort. Replace or extend these candidates
     // when the exact Meiro SDK browser API is known for a target deployment.
+    if (typeof window.mpt === "function") {
+      try {
+        window.mpt("event", eventPayload.type, (eventPayload.payload && eventPayload.payload.custom_payload) || eventPayload.payload || {});
+        debug("Forwarded event to Pipes SDK mpt API", eventPayload.type);
+        return true;
+      } catch (error) {
+        debug("Pipes SDK mpt API rejected event", error);
+      }
+    }
+
     const candidates = [
       window.MeiroEvents && window.MeiroEvents.track,
       window.Meiro && window.Meiro.track,
@@ -350,9 +552,13 @@
     const detail = event.detail || {};
     state.debug = Boolean(detail.debug);
     state.dataLayerNames = Array.isArray(detail.dataLayerNames) ? detail.dataLayerNames : [];
+    configurePipesSdk(detail);
     watchDataLayers(state.dataLayerNames);
     if (detail.observeTrackingRequests !== false) {
       installRequestObserver();
+    }
+    if (detail.enableWebLayers !== false) {
+      installWebLayerObserver();
     }
     if (detail.injectSdk && detail.sdkSourceUrl) {
       injectSdk(detail.sdkSourceUrl);
@@ -374,6 +580,7 @@
 
   window.__MEIRO_EVENT_SIMULATOR_BRIDGE__ = {
     injectSdk,
+    configurePipesSdk,
     callPotentialSdkApi,
     collectDiagnostics
   };

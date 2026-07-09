@@ -267,7 +267,8 @@
       { label: "Meta tags", count: (sources.meta_tags || []).length, detail: `${(sources.meta_tags || []).length} meta/schema hints` },
       { label: "Tracker globals", count: (diagnostics.tracker_globals || []).filter((item) => item.exists).length, detail: (diagnostics.tracker_globals || []).filter((item) => item.exists).map((item) => item.name).join(", ") || "None detected" },
       { label: "Tracked resources", count: (sources.network_resources || []).length, detail: `${(sources.network_resources || []).length} tracking-related network resource(s)` },
-      { label: "Live request signals", count: (sources.tracking_requests || []).length, detail: `${(sources.tracking_requests || []).length} observed fetch/XHR tracking request(s)` }
+      { label: "Live request signals", count: (sources.tracking_requests || []).length, detail: `${(sources.tracking_requests || []).length} observed fetch/XHR tracking request(s)` },
+      { label: "Web layers", count: (sources.web_layers || []).length, detail: summarizeWebLayers(sources.web_layers || []) }
     ];
   }
 
@@ -276,6 +277,7 @@
     const pushes = page && page.data_layer_pushes ? page.data_layer_pushes : [];
     const resources = page && page.sources && page.sources.network_resources ? page.sources.network_resources : [];
     const requestSignals = page && page.request_signals ? page.request_signals : [];
+    const webLayerSignals = page && page.web_layer_signals ? page.web_layer_signals : [];
     const endpointHost = settings && settings.collection_endpoint ? (() => {
       try {
         return new URL(settings.collection_endpoint).host;
@@ -317,6 +319,17 @@
       });
     });
 
+    webLayerSignals.forEach((signal) => {
+      timeline.push({
+        kind: "web_layer",
+        timestamp: signal.timestamp,
+        label: webLayerLabel(signal),
+        detail: signal.status || signal.signal_type || "observed",
+        source: signal,
+        sort_time: normalizeTimestamp(signal.timestamp)
+      });
+    });
+
     (logs || []).forEach((entry) => {
       const validation = summarizeValidationEntry(entry);
       const nearestPush = pushes
@@ -344,6 +357,27 @@
     });
 
     return timeline.sort((left, right) => right.sort_time - left.sort_time);
+  }
+
+  function summarizeWebLayers(signals) {
+    const served = signals.filter((signal) => signal.status === "served").length;
+    const rendered = signals.filter((signal) => signal.status === "rendered").length;
+    const failed = signals.filter((signal) => signal.status === "failed").length;
+    if (!signals.length) {
+      return "No web-layer/banner signals observed.";
+    }
+    return `${served} served, ${rendered} rendered, ${failed} failed`;
+  }
+
+  function webLayerLabel(signal) {
+    if (!signal) {
+      return "Web layer";
+    }
+    if (signal.signal_type === "dom") {
+      return `Rendered ${signal.selector || signal.tag || "web layer"}`;
+    }
+    const target = signal.host || signal.url || signal.name || "web layer request";
+    return `${signal.transport || signal.signal_type || "web layer"} ${target}`;
   }
 
   function flattenObject(value, prefix, target) {
@@ -392,6 +426,8 @@
     buildDeliverySummary,
     buildSourceCoverage,
     buildTimeline,
+    summarizeWebLayers,
+    webLayerLabel,
     diffEvents
   });
 })(globalThis);

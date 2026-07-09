@@ -56,6 +56,7 @@ Open the extension popup and click **Options**. The options page supports:
 - Debug logging
 - Consent override
 - Sending allowed when consent override is off
+- SDK web layers and banner display
 - Mode selector: `inject_sdk`, `simulate_only`, or `hybrid`
 - Optional scroll depth, outbound click, and file download metadata
 
@@ -68,6 +69,8 @@ The Prism API token is stored in `chrome.storage.local`, not sync storage, so it
 `inject_sdk`
 
 Injects the configured SDK source into the page context. The extension still observes events and sends payloads through the service worker, because a generic Meiro SDK API cannot be assumed on every site. If a known global tracking function is detected, the page bridge also attempts to forward events to it.
+
+For Pipes `mpt.js`, the page bridge queues `window.mpt("config", ...)` with the configured collection endpoint, enables tracking rules and web layers/banners, applies granted consent when consent override or sending is allowed, and forwards `page_view` through `window.mpt("event", "page_view", ...)`. This lets SDK-delivered web layer banners evaluate and render in addition to the extension's simulated tracking.
 
 `simulate_only`
 
@@ -133,6 +136,7 @@ It includes:
 - Readiness checklist for tracking state, endpoint, user ID, SDK URL, SDK detection, data layers, page views, and successful endpoint responses
 - Source coverage summary across data layers, storage, cookies, globals, meta tags, and tracking-related resources
 - Live observation of tracking-like `fetch` and `XMLHttpRequest` calls from the inspected page, with method, status, duration, request size, and sanitized request/response previews
+- Web layer and banner debugging signals, including likely SDK banner requests, served/failed status, and rendered DOM clues
 - Event inspector with payload validation, PII warnings, copy, and replay
 - Direct Pipes source control: when the collect endpoint reports an unknown `event_type`, the workbench can create that Event Type on the resolved source without leaving the extension, including inferred schema and identifier rules when a sample is available
 - Pipes setup queue that summarizes captured Event Types missing from Pipes or recently failing delivery, with one-click definition sync from captured payloads

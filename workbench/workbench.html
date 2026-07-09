@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Meiro Event Workbench</title>
-    <link rel="stylesheet" href="workbench.css">
+    <link rel="stylesheet" href="workbench.css?v=20260709-colorize">
   </head>
   <body>
     <main id="appShell" class="app">
@@ -18,12 +18,13 @@
         </div>
 
         <nav class="nav" aria-label="Workflow navigation">
-          <button data-view="overview" class="active" type="button" title="Overview"><span class="button-short">Ovr</span><span class="button-label">Overview</span></button>
-          <button data-view="signals" type="button" title="Signals"><span class="button-short">Sig</span><span class="button-label">Signals</span></button>
-          <button data-view="builder" type="button" title="Event Builder"><span class="button-short">Map</span><span class="button-label">Event Builder</span></button>
-          <button data-view="validation" type="button" title="Validation"><span class="button-short">Val</span><span class="button-label">Validation</span></button>
-          <button data-view="delivery" type="button" title="Delivery"><span class="button-short">Net</span><span class="button-label">Delivery</span></button>
-          <button data-view="profiles" type="button" title="Profiles"><span class="button-short">Cfg</span><span class="button-label">Profiles</span></button>
+          <button data-view="overview" class="active" type="button" title="Overview" aria-label="Overview"><span class="button-short" aria-hidden="true">Ovr</span><span class="button-label">Overview</span></button>
+          <button data-view="signals" type="button" title="Signals" aria-label="Signals"><span class="button-short" aria-hidden="true">Sig</span><span class="button-label">Signals</span></button>
+          <button data-view="builder" type="button" title="Event Builder" aria-label="Event Builder"><span class="button-short" aria-hidden="true">Map</span><span class="button-label">Event Builder</span></button>
+          <button data-view="validation" type="button" title="Validation" aria-label="Validation"><span class="button-short" aria-hidden="true">Val</span><span class="button-label">Validation</span></button>
+          <button data-view="delivery" type="button" title="Delivery" aria-label="Delivery"><span class="button-short" aria-hidden="true">Net</span><span class="button-label">Delivery</span></button>
+          <button data-view="pipes" type="button" title="Pipes" aria-label="Pipes"><span class="button-short" aria-hidden="true">Pip</span><span class="button-label">Pipes</span></button>
+          <button data-view="profiles" type="button" title="Profiles" aria-label="Profiles"><span class="button-short" aria-hidden="true">Cfg</span><span class="button-label">Profiles</span></button>
         </nav>
 
         <section class="sidebar-box">
@@ -35,10 +36,10 @@
         <section class="sidebar-box">
           <h2>Actions</h2>
           <div class="stack-actions">
-            <button id="refreshButton" type="button" title="Refresh"><span class="button-short">Ref</span><span class="button-label">Refresh</span></button>
-            <button id="enableButton" class="primary" type="button" title="Enable live collection"><span class="button-short">On</span><span class="button-label">Enable live collection</span></button>
-            <button id="disableButton" type="button" title="Disable tab"><span class="button-short">Off</span><span class="button-label">Disable tab</span></button>
-            <button id="exportSetupButton" type="button" title="Export setup"><span class="button-short">Exp</span><span class="button-label">Export setup</span></button>
+            <button id="refreshButton" type="button" title="Refresh" aria-label="Refresh"><span class="button-short" aria-hidden="true">Ref</span><span class="button-label">Refresh</span></button>
+            <button id="enableButton" class="primary" type="button" title="Enable live collection" aria-label="Enable live collection"><span class="button-short" aria-hidden="true">On</span><span class="button-label">Enable live collection</span></button>
+            <button id="disableButton" type="button" title="Disable tab" aria-label="Disable tab"><span class="button-short" aria-hidden="true">Off</span><span class="button-label">Disable tab</span></button>
+            <button id="exportSetupButton" type="button" title="Export setup" aria-label="Export setup"><span class="button-short" aria-hidden="true">Exp</span><span class="button-label">Export setup</span></button>
           </div>
         </section>
 
@@ -78,6 +79,7 @@
                   <option value="event">Events</option>
                   <option value="tracking_request">Tracking requests</option>
                   <option value="data_layer_push">Data layer pushes</option>
+                  <option value="web_layer">Web layers</option>
                   <option value="page_view">Page views</option>
                 </select>
               </div>
@@ -231,11 +233,11 @@
           </section>
         </section>
 
-        <section id="profiles" class="view">
+        <section id="pipes" class="view">
           <header class="view-header">
             <div>
-              <h2>Profiles</h2>
-              <p>Manage environment settings and payload contracts used by the workbench.</p>
+              <h2>Pipes</h2>
+              <p>Manage source definitions, tracking rules, transforms, tests, and payload contracts.</p>
             </div>
           </header>
           <section class="card">
@@ -296,18 +298,27 @@
               </div>
               <textarea id="contractsEditor" spellcheck="false"></textarea>
             </section>
-            <section class="card">
-              <div class="card-header">
-                <h3>Environment profiles</h3>
-                <button id="createProfileButton" type="button">Save current</button>
-              </div>
-              <label class="field">
-                <span>Profile name</span>
-                <input id="profileName" type="text" placeholder="Staging / production / client demo">
-              </label>
-              <div id="profilesList" class="stack"></div>
-            </section>
           </div>
+        </section>
+
+        <section id="profiles" class="view">
+          <header class="view-header">
+            <div>
+              <h2>Profiles</h2>
+              <p>Save and apply environment settings for staging, production, and client demos.</p>
+            </div>
+          </header>
+          <section class="card">
+            <div class="card-header">
+              <h3>Environment profiles</h3>
+              <button id="createProfileButton" type="button">Save current</button>
+            </div>
+            <label class="field">
+              <span>Profile name</span>
+              <input id="profileName" type="text" placeholder="Staging / production / client demo">
+            </label>
+            <div id="profilesList" class="stack"></div>
+          </section>
         </section>
       </section>
     </main>
@@ -315,6 +326,6 @@
     <script src="../src/shared/constants.js"></script>
     <script src="../src/shared/browser-utils.js"></script>
     <script src="../src/shared/admin-utils.js"></script>
-    <script src="workbench.js"></script>
+    <script src="workbench.js?v=20260709-colorize"></script>
   </body>
 </html>

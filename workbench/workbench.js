@@ -160,7 +160,9 @@
       render();
     } catch (error) {
       if (!handlePossibleContextInvalidation(error)) {
-        setMessage(error && error.message ? error.message : String(error), true);
+        state = buildDisconnectedState(error);
+        render();
+        setMessage("Workbench is disconnected. Use the recovery checklist in Overview.", true);
       }
     } finally {
       loading = false;
@@ -194,23 +196,67 @@
 
   function render() {
     if (!state || !state.ok) {
-      setMessage(state && state.error ? state.error : "Workbench state unavailable.", true);
+      state = buildDisconnectedState(state && state.error ? state.error : "Workbench state unavailable.");
+      setMessage("Workbench is disconnected. Use the recovery checklist in Overview.", true);
+      render();
       return;
     }
 
     const scrollState = captureDetailScrollState();
     renderHeader();
+    if (state.disconnected) {
+      renderOverview();
+      renderDisconnectedSections();
+      restoreDetailScrollState(scrollState);
+      return;
+    }
+
     renderOverview();
     renderSignals();
     renderBuilder();
     renderValidation();
     renderDelivery();
+    renderPipes();
     renderProfiles();
     restoreDetailScrollState(scrollState);
   }
 
+  function renderDisconnectedSections() {
+    const message = "Reconnect the Workbench to inspect this view.";
+    renderStack(els.signalsGrid, [emptyState("Connect an inspected tab to inspect data layers, SDK globals, requests, and web-layer signals.")]);
+    els.pickerOutput.textContent = message;
+    renderStack(els.rulesList, [], message);
+    renderStack(els.recipeList, [], message);
+    renderStack(els.formsList, [], message);
+    renderStack(els.interactiveList, [], message);
+    renderMetrics(els.eventCatalog, []);
+    renderStack(els.pipesSetupQueue, [], message);
+    renderStack(els.validationList, [], message);
+    els.diffSummary.textContent = message;
+    renderStack(els.diffList, [], message);
+    renderMetrics(els.deliverySummary, []);
+    renderStack(els.deliveryList, [], message);
+    renderStack(els.pipesControl, [], "Connect the extension context before managing Pipes sources.");
+    renderStack(els.sourceTestInspector, [], message);
+    renderStack(els.pipesEventTypes, [], message);
+    renderStack(els.profilesList, [], message);
+  }
+
   function renderHeader() {
     applyUiState();
+    if (state.disconnected) {
+      setExtensionActionAvailability(false);
+      els.pageContext.textContent = "Workbench is open, but extension APIs are not available in this page context.";
+      els.statusPills.textContent = "";
+      [
+        pill("Workbench disconnected", "bad"),
+        pill("Extension context missing", "bad"),
+        pill("Read-only diagnostics", "warn")
+      ].forEach((item) => els.statusPills.appendChild(item));
+      return;
+    }
+
+    setExtensionActionAvailability(true);
     els.pageContext.textContent = activeTab
       ? `${activeTab.title || "Inspected page"}${activeTab.url ? ` · ${activeTab.url}` : ""}`
       : "No inspected page available.";
@@ -235,17 +281,28 @@
     const delivery = state.delivery_summary || {};
     const eventCatalog = state.event_catalog || [];
     const filteredTimeline = filterTimeline(state.timeline || []);
+    const pageIssue = !page || page.ok === false || state.disconnected;
     syncFilterInputs();
     renderMetrics(els.overviewSummary, [
-      metric("Captured events", delivery.total || 0, `${eventCatalog.length} event type(s)`),
-      metric("Successful sends", delivery.ok || 0, `${delivery.failed || 0} issue(s)`),
-      metric("PII warnings", delivery.pii_warnings || 0, `${delivery.validation_failures || 0} validation failure(s)`),
-      metric("Data layer pushes", (page.data_layer_pushes || []).length, `${((page.sdk_diagnostics || {}).data_layers || []).filter((item) => item.exists).length} layer(s) active`)
+      metric("Web-layer health", webLayerHealthCount(page), webLayerHealthDetail(page), webLayerHealthTone(page)),
+      metric("Captured events", delivery.total || 0, `${eventCatalog.length} event type(s)`, "info"),
+      metric("Successful sends", delivery.ok || 0, `${delivery.failed || 0} issue(s)`, delivery.failed ? "bad" : "good"),
+      metric("PII warnings", delivery.pii_warnings || 0, `${delivery.validation_failures || 0} validation failure(s)`, delivery.pii_warnings || delivery.validation_failures ? "warn" : "neutral"),
+      metric("Data layer pushes", (page.data_layer_pushes || []).length, `${((page.sdk_diagnostics || {}).data_layers || []).filter((item) => item.exists).length} layer(s) active`, "neutral")
     ]);
 
-    renderStack(els.readinessList, (state.readiness || []).map((item) => readinessCard(item)));
+    const readinessNodes = state.disconnected
+      ? [workbenchRecoveryCard(page)]
+      : pageIssue
+        ? [workbenchRecoveryCard(page)].concat((state.readiness || []).map((item) => readinessCard(item)))
+      : (state.readiness || []).map((item) => readinessCard(item));
+    renderStack(els.readinessList, readinessNodes);
     renderStack(els.sourceCoverage, (state.source_coverage || []).map((item) => sourceCoverageCard(item)));
-    renderStack(els.timelineList, filteredTimeline.map((item) => timelineCard(item)), "No timeline items match the current filters.");
+    renderStack(
+      els.timelineList,
+      filteredTimeline.map((item) => timelineCard(item)),
+      pageIssue ? "Connect an inspected tab and enable live collection to populate the timeline." : "No timeline items match the current filters."
+    );
   }
 
   function renderSignals() {
@@ -257,6 +314,7 @@
       jsonCard("Data layers", diagnostics.data_layers || []),
       jsonCard("Data layer push history", page.data_layer_pushes || []),
       jsonCard("Live tracking requests", page.request_signals || []),
+      webLayerStatusCard(page.web_layer_signals || []),
       jsonCard("Storage", {
         local_storage: sources.local_storage || [],
         session_storage: sources.session_storage || []
@@ -309,7 +367,7 @@
     const filteredLogs = filterValidationLogs(state.logs || []);
     syncFilterInputs();
     renderMetrics(els.eventCatalog, (state.event_catalog || []).map((item) => (
-      metric(item.event_type, item.count, `ok ${item.ok_count} · issues ${item.fail_count}`)
+      metric(item.event_type, item.count, `ok ${item.ok_count} · issues ${item.fail_count}`, item.fail_count ? "bad" : "good")
     )));
 
     renderStack(els.pipesSetupQueue, buildPipesSetupQueue().map((item) => pipesSetupCard(item)), "Capture events and connect Prism to see Pipes setup tasks.");
@@ -322,23 +380,29 @@
     const filteredLogs = filterDeliveryLogs(state.logs || []);
     syncFilterInputs();
     renderMetrics(els.deliverySummary, [
-      metric("Delivered", summary.ok || 0, "HTTP success"),
-      metric("Failed", summary.failed || 0, "HTTP/network/permission issues"),
-      metric("Validation failures", summary.validation_failures || 0, "contract/schema issues"),
-      metric("PII warnings", summary.pii_warnings || 0, "payload policy warnings")
+      metric("Delivered", summary.ok || 0, "HTTP success", "good"),
+      metric("Failed", summary.failed || 0, "HTTP/network/permission issues", summary.failed ? "bad" : "neutral"),
+      metric("Validation failures", summary.validation_failures || 0, "contract/schema issues", summary.validation_failures ? "warn" : "neutral"),
+      metric("PII warnings", summary.pii_warnings || 0, "payload policy warnings", summary.pii_warnings ? "warn" : "neutral")
     ]);
 
     renderStack(els.deliveryList, filteredLogs.map((entry) => deliveryCard(entry)), "No delivery items match the current filters.");
   }
 
-  function renderProfiles() {
-    if (uiState.activeView === "profiles" && isProfilesEditorFocused()) {
+  function renderPipes() {
+    if (uiState.activeView === "pipes" && isWorkbenchEditorFocused("#pipes")) {
       return;
     }
     renderPipesControl();
     renderSourceEditors();
     renderSourceTest();
     renderPipesEventTypes();
+  }
+
+  function renderProfiles() {
+    if (uiState.activeView === "profiles" && isWorkbenchEditorFocused("#profiles")) {
+      return;
+    }
     renderStack(els.profilesList, (state.profiles || []).map((profile) => profileCard(profile)));
   }
 
@@ -499,6 +563,118 @@
     items.forEach((item) => target.appendChild(item));
   }
 
+  function setExtensionActionAvailability(available) {
+    [
+      "enableButton",
+      "disableButton",
+      "exportSetupButton",
+      "saveDataLayersButton",
+      "pickerButton",
+      "clearLogsButton",
+      "saveContractsButton",
+      "createProfileButton"
+    ].forEach((id) => {
+      const button = document.getElementById(id);
+      if (button) {
+        if (!button.dataset.originalTitle) {
+          button.dataset.originalTitle = button.title || "";
+        }
+        button.disabled = !available;
+        button.title = available ? (button.dataset.originalTitle || button.title || "") : "Connect the extension context before using this action.";
+      }
+    });
+  }
+
+  function buildDisconnectedState(error) {
+    const detail = normalizeWorkbenchError(error);
+    const settings = shared.mergeSettings();
+    return {
+      ok: true,
+      disconnected: true,
+      disconnected_reason: detail,
+      settings,
+      logs: [],
+      contracts: shared.DEFAULT_CONTRACTS || [],
+      recipes: shared.DEFAULT_RECIPES || [],
+      profiles: shared.DEFAULT_PROFILES || [],
+      status: { enabled: false },
+      page: {
+        ok: false,
+        active: false,
+        error: detail.message,
+        recovery_steps: detail.steps
+      },
+      pipes: { configured: false, error: "Connect the extension context before managing Pipes." },
+      readiness: detail.steps.map((step) => ({ label: step.label, ok: false, detail: step.detail })),
+      event_catalog: [],
+      delivery_summary: { total: 0, ok: 0, failed: 0, validation_failures: 0, pii_warnings: 0, by_status: {} },
+      source_coverage: [
+        { label: "Extension context", count: 0, detail: detail.message },
+        { label: "Web layers", count: 0, detail: "No web-layer/banner signals observed because no tab is connected." }
+      ],
+      timeline: []
+    };
+  }
+
+  function normalizeWorkbenchError(error) {
+    const raw = error && error.message ? error.message : String(error || "");
+    if (/chrome is not defined|Cannot read properties of undefined \(reading 'query'\)|Cannot read properties of undefined/i.test(raw)) {
+      return {
+        message: "This page is not running inside the Chrome extension workbench context.",
+        detail: raw,
+        steps: [
+          { label: "Open the extension workbench", detail: "Use the toolbar popup or the Meiro DevTools panel instead of a plain browser URL." },
+          { label: "Inspect a normal web page", detail: "Chrome-owned pages and static local previews cannot provide tab, permission, or SDK diagnostics." },
+          { label: "Enable live collection", detail: "After the target page is selected, enable collection so page, SDK, and web-layer signals can stream in." }
+        ]
+      };
+    }
+
+    if (/Extension context invalidated|context invalidated|Receiving end does not exist|message port closed/i.test(raw)) {
+      return {
+        message: "The extension context was reloaded while the Workbench was open.",
+        detail: raw,
+        steps: [
+          { label: "Reopen the Workbench", detail: "Close this panel and reopen Meiro Workbench from the extension or DevTools." },
+          { label: "Reload the inspected page", detail: "Reload the target tab after the extension finishes reloading." },
+          { label: "Enable live collection", detail: "Turn collection back on to restore content-script diagnostics." }
+        ]
+      };
+    }
+
+    return {
+      message: "Workbench state is unavailable.",
+      detail: raw || "Unknown error",
+      steps: [
+        { label: "Refresh the Workbench", detail: "Retry loading the current tab state." },
+        { label: "Check tab permissions", detail: "Grant site access if Chrome asks for permission to inspect this page." },
+        { label: "Enable live collection", detail: "Connect the content script before reading SDK, DOM, and web-layer diagnostics." }
+      ]
+    };
+  }
+
+  function workbenchRecoveryCard(page) {
+    const detail = state.disconnected_reason || normalizeWorkbenchError(page && page.error);
+    const article = document.createElement("article");
+    article.className = "item recovery-card";
+    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div></div><ol class="recovery-steps"></ol>`;
+    article.querySelector(".item-title").textContent = "Reconnect Workbench";
+    article.querySelector(".item-meta").textContent = detail.message;
+    article.querySelector(".item-head").appendChild(pill("ACTION", "warn"));
+    const list = article.querySelector(".recovery-steps");
+    (page && page.recovery_steps ? page.recovery_steps : detail.steps).forEach((step) => {
+      const item = document.createElement("li");
+      item.innerHTML = `<strong></strong><span></span>`;
+      item.querySelector("strong").textContent = step.label;
+      item.querySelector("span").textContent = step.detail;
+      list.appendChild(item);
+    });
+    if (detail.detail) {
+      article.appendChild(subtleBox(`Technical detail: ${detail.detail}`));
+    }
+    return article;
+  }
+
   function showView(viewId) {
     document.querySelectorAll(".nav button").forEach((button) => button.classList.toggle("active", button.dataset.view === viewId));
     document.querySelectorAll(".view").forEach((view) => view.classList.toggle("active", view.id === viewId));
@@ -512,13 +688,63 @@
     saveUiState();
   }
 
-  function metric(label, value, detail) {
+  function metric(label, value, detail, tone) {
     const article = document.createElement("article");
-    article.className = "metric";
+    article.className = `metric ${tone ? `tone-${tone}` : ""}`.trim();
     article.innerHTML = `<div class="item-title"></div><div class="metric-value"></div><div class="metric-sub"></div>`;
     article.querySelector(".item-title").textContent = label;
     article.querySelector(".metric-value").textContent = String(value);
     article.querySelector(".metric-sub").textContent = detail;
+    return article;
+  }
+
+  function webLayerHealthCount(page) {
+    const signals = page && page.web_layer_signals ? page.web_layer_signals : [];
+    return signals.length;
+  }
+
+  function webLayerHealthDetail(page) {
+    const signals = page && page.web_layer_signals ? page.web_layer_signals : [];
+    if (!signals.length) {
+      return "No banner signals yet";
+    }
+    return shared.summarizeWebLayers ? shared.summarizeWebLayers(signals) : `${signals.length} signal(s)`;
+  }
+
+  function webLayerHealthTone(page) {
+    const signals = page && page.web_layer_signals ? page.web_layer_signals : [];
+    if (signals.some((signal) => signal.status === "failed")) {
+      return "bad";
+    }
+    if (signals.some((signal) => signal.status === "rendered")) {
+      return "good";
+    }
+    if (signals.some((signal) => signal.status === "served" || signal.status === "loaded")) {
+      return "warn";
+    }
+    return "info";
+  }
+
+  function webLayerStatusCard(signals) {
+    const article = document.createElement("article");
+    article.className = `card web-layer-card tone-${webLayerHealthTone({ web_layer_signals: signals })}`;
+    article.dataset.detailKey = "web-layer-status";
+    article.innerHTML = `<div class="card-header"><h3>Web layers and banners</h3><span class="pill"></span></div><div class="web-layer-strip"></div><pre></pre>`;
+    article.querySelector(".pill").textContent = webLayerHealthDetail({ web_layer_signals: signals });
+    const strip = article.querySelector(".web-layer-strip");
+    [
+      { label: "Served", value: signals.filter((signal) => signal.status === "served" || signal.status === "loaded").length, tone: "warn" },
+      { label: "Rendered", value: signals.filter((signal) => signal.status === "rendered").length, tone: "good" },
+      { label: "Failed", value: signals.filter((signal) => signal.status === "failed").length, tone: "bad" }
+    ].forEach((item) => {
+      const node = document.createElement("div");
+      node.className = `web-layer-step tone-${item.tone}`;
+      node.innerHTML = `<strong></strong><span></span>`;
+      node.querySelector("strong").textContent = String(item.value);
+      node.querySelector("span").textContent = item.label;
+      strip.appendChild(node);
+    });
+    article.querySelector("pre").textContent = JSON.stringify(signals, null, 2);
     return article;
   }
 
@@ -590,6 +816,20 @@
       }
       if (item.source.response_preview) {
         body.appendChild(subtleBox(`Response preview: ${item.source.response_preview}`));
+      }
+    } else if (item.kind === "web_layer") {
+      const fields = document.createElement("div");
+      fields.className = "kv";
+      fields.appendChild(kvBox("Status", item.source.status || "observed"));
+      fields.appendChild(kvBox("Type", item.source.signal_type || "n/a"));
+      fields.appendChild(kvBox("HTTP", item.source.http_status !== null && item.source.http_status !== undefined ? item.source.http_status : "n/a"));
+      fields.appendChild(kvBox("Duration", item.source.duration_ms !== null && item.source.duration_ms !== undefined ? `${item.source.duration_ms} ms` : "n/a"));
+      body.appendChild(fields);
+      if (item.source.url || item.source.name) {
+        body.appendChild(subtleBox(item.source.url || item.source.name));
+      }
+      if (item.source.text_preview) {
+        body.appendChild(subtleBox(`Rendered text: ${item.source.text_preview}`));
       }
     } else {
       const pre = document.createElement("pre");
@@ -1792,7 +2032,7 @@
     const filters = uiState.filters.timeline;
     const search = normalize(filters.search);
     return items.filter((item) => {
-      const kindMatches = filters.kind === "all" || item.kind === filters.kind;
+      const kindMatches = filters.kind === "all" || timelineKindMatches(item, filters.kind);
       if (!kindMatches) {
         return false;
       }
@@ -1807,6 +2047,20 @@
         JSON.stringify(item.source || {})
       ], search);
     });
+  }
+
+  function timelineKindMatches(item, filterKind) {
+    if (!filterKind || filterKind === "all") {
+      return true;
+    }
+    if (item.kind === filterKind) {
+      return true;
+    }
+    if (item.kind !== "event") {
+      return false;
+    }
+    const eventType = item.source && (item.source.event_type || item.source.type || shared.getByPath(item.source, "payload.type"));
+    return item.label === filterKind || eventType === filterKind;
   }
 
   function filterValidationLogs(logs) {
@@ -2066,11 +2320,11 @@
     });
   }
 
-  function isProfilesEditorFocused() {
+  function isWorkbenchEditorFocused(scopeSelector) {
     const active = document.activeElement;
     return Boolean(active)
       && /INPUT|TEXTAREA|SELECT/.test(active.tagName)
-      && Boolean(active.closest && active.closest("#profiles"));
+      && Boolean(active.closest && active.closest(scopeSelector));
   }
 
   async function getActiveTab() {

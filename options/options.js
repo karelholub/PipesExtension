@@ -16,6 +16,7 @@
     debug: document.getElementById("debug"),
     consent_override: document.getElementById("consentOverride"),
     sending_allowed: document.getElementById("sendingAllowed"),
+    enable_web_layers: document.getElementById("enableWebLayers"),
     capture_scroll_depth: document.getElementById("captureScrollDepth"),
     capture_outbound_clicks: document.getElementById("captureOutboundClicks"),
     capture_file_downloads: document.getElementById("captureFileDownloads")
@@ -113,6 +114,7 @@
       debug: fields.debug.checked,
       consent_override: fields.consent_override.checked,
       sending_allowed: fields.sending_allowed.checked,
+      enable_web_layers: fields.enable_web_layers.checked,
       capture_scroll_depth: fields.capture_scroll_depth.checked,
       capture_outbound_clicks: fields.capture_outbound_clicks.checked,
       capture_file_downloads: fields.capture_file_downloads.checked
