@@ -54,6 +54,10 @@ async function handleMessage(message, sender) {
       return getTabStatus(message.tabId);
     case "MEIRO_EVENT":
       return collectEvent(message.payload, sender);
+    case "SDK_FORWARD_LOG":
+      return logSdkForwardOutcome(message.payload, message.outcome, sender);
+    case "RULE_ERROR":
+      return logRuleError(message, sender);
     case "GET_LOGS":
       return { ok: true, logs: await getLogs() };
     case "CLEAR_LOGS":
@@ -85,6 +89,8 @@ async function handleMessage(message, sender) {
       return syncPrismEventTypeFromEvent(message.eventType, message.payload, message.verify);
     case "UPDATE_PRISM_EVENT_TYPE":
       return updatePrismEventType(message.eventTypeId, message.updates);
+    case "DELETE_PRISM_EVENT_TYPE":
+      return deletePrismEventType(message.eventTypeId);
     case "TEST_PRISM_SOURCE":
       return testPrismSource(message.payload, message.headers);
     case "VERIFY_PRISM_EVENT_PAYLOAD":
@@ -93,6 +99,10 @@ async function handleMessage(message, sender) {
       return savePrismTrackingRules(message.code);
     case "SAVE_PRISM_SOURCE_FUNCTION":
       return savePrismSourceFunction(message.code);
+    case "GET_PIPE_DELIVERIES":
+      return getPipeDeliveries(message.pipeId);
+    case "TOGGLE_PRISM_PIPE":
+      return togglePrismPipe(message.pipeId);
     default:
       return { ok: false, error: "Unknown message type." };
   }
@@ -276,8 +286,55 @@ async function collectEvent(payload, sender) {
   }
 
   const result = await postEvent(settings, payload);
-  await appendLog(logEntry(tabId, payload, settings.collection_endpoint, result.ok, result.status, result.error, validationErrors, piiFindings, false, result.transport));
+  const transport = Object.assign({ kind: "extension_direct", mode: settings.mode }, result.transport);
+  await appendLog(logEntry(tabId, payload, settings.collection_endpoint, result.ok, result.status, result.error, validationErrors, piiFindings, false, transport));
   return result;
+}
+
+async function logSdkForwardOutcome(payload, outcome, sender) {
+  const settings = await getSettings();
+  const contracts = await getContracts();
+  const tabId = sender && sender.tab ? sender.tab.id : null;
+  const validationErrors = shared.validatePayload(payload).concat(shared.validateAgainstContracts(payload, contracts));
+  const piiFindings = shared.scanForPii(payload);
+  const ok = Boolean(outcome && outcome.ok);
+  const error = ok ? null : ((outcome && outcome.reason) || "The page's SDK did not accept the event.");
+
+  await appendLog(logEntry(
+    tabId,
+    payload,
+    "(page SDK — no extension network request was made)",
+    ok,
+    null,
+    error,
+    validationErrors,
+    piiFindings,
+    false,
+    {
+      kind: "sdk_forward",
+      mode: settings.mode,
+      sdk: outcome && outcome.sdk,
+      attempted: Boolean(outcome && outcome.attempted)
+    }
+  ));
+  return { ok: true };
+}
+
+async function logRuleError(message, sender) {
+  const tabId = sender && sender.tab ? sender.tab.id : null;
+  await appendLog(logEntry(
+    tabId,
+    { type: "selector_rule_error" },
+    "(local selector rule — no network request)",
+    false,
+    null,
+    `Selector rule "${message.ruleName || message.ruleId || "unnamed"}" has an invalid selector "${message.selector}": ${message.error}`,
+    [],
+    [],
+    false,
+    { kind: "selector_rule_error", ruleId: message.ruleId, selector: message.selector }
+  ));
+  return { ok: true };
 }
 
 async function postEvent(settings, payload) {
@@ -289,7 +346,8 @@ async function postEvent(settings, payload) {
 
   // Meiro/Pipes deployments may require a different envelope or auth scheme.
   // Keep this isolated so collector-specific transport can be swapped later.
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  const maxAttempts = 3;
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const startedAt = Date.now();
     try {
       const response = await fetch(settings.collection_endpoint, {
@@ -312,8 +370,11 @@ async function postEvent(settings, payload) {
         ? semanticErrors.join(" ")
         : (!response.ok ? responseData.preview || `HTTP ${response.status}` : null);
       const semanticFailure = semanticErrors.length > 0;
+      // 429 backpressure means "the ingestion queue is full, retry shortly" per
+      // the /collect contract, not a permanent rejection like other 4xx codes.
+      const shouldRetry = !response.ok && !semanticFailure && (response.status >= 500 || response.status === 429);
 
-      if (response.ok || semanticFailure || attempt === 1 || response.status < 500) {
+      if (!shouldRetry || attempt === maxAttempts - 1) {
         return {
           ok: response.ok && !semanticFailure,
           status: response.status,
@@ -321,8 +382,11 @@ async function postEvent(settings, payload) {
           transport
         };
       }
+
+      await sleep(response.status === 429 ? 1000 * (attempt + 1) : 500);
+      continue;
     } catch (error) {
-      if (attempt === 1) {
+      if (attempt === maxAttempts - 1) {
         return {
           ok: false,
           status: null,
@@ -344,15 +408,6 @@ async function postEvent(settings, payload) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function readResponsePreview(response) {
-  try {
-    const text = await response.text();
-    return text ? text.slice(0, 300) : null;
-  } catch (_error) {
-    return null;
-  }
 }
 
 async function readResponseData(response) {
@@ -593,17 +648,30 @@ async function getPrismWorkbenchState(settings) {
   }
 
   try {
-    const [sources, identifierTypes] = await Promise.all([
+    const [sources, identifierTypes, allPipes, eventDestinations] = await Promise.all([
       prismApiRequest(connection, baseUrl, "/api/event-streams"),
-      prismApiRequest(connection, baseUrl, "/api/identifier-types")
+      prismApiRequest(connection, baseUrl, "/api/identifier-types"),
+      prismApiRequest(connection, baseUrl, "/api/pipes").catch(() => []),
+      prismApiRequest(connection, baseUrl, "/api/event-destinations").catch(() => [])
     ]);
     const sourceSummary = (sources || []).find((item) => item.slug === sourceSlug) || null;
     let source = sourceSummary;
     let recentExamples = [];
+    let trackingRulesCode = null;
+    let trackingRulesFetchError = null;
+    let resolutionError = null;
+    if (!sourceSummary) {
+      resolutionError = sourceSlug
+        ? `No Pipes source with slug "${sourceSlug}" was found at ${baseUrl}. Check the collection endpoint and Prism connection.`
+        : `Collection endpoint "${settings && settings.collection_endpoint}" does not look like a Pipes /collect/:slug URL, so no source slug could be extracted. Set a collection endpoint shaped like https://<host>/collect/<source-slug>.`;
+    }
     if (sourceSummary && sourceSummary.id) {
-      const [sourceDetail, sourceExamples] = await Promise.all([
+      const [sourceDetail, sourceExamples, trackingRules] = await Promise.all([
         prismApiRequest(connection, baseUrl, `/api/event-streams/${sourceSummary.id}`),
-        prismApiRequest(connection, baseUrl, `/api/event-streams/${sourceSummary.id}/examples`)
+        prismApiRequest(connection, baseUrl, `/api/event-streams/${sourceSummary.id}/examples`),
+        // Tracking rules are a separate sub-resource, not inlined on the source detail
+        // response, and may legitimately not exist yet (e.g. a fresh or webhook source).
+        prismApiRequest(connection, baseUrl, `/api/event-streams/${sourceSummary.id}/tracking-rules`).catch((error) => ({ __fetch_error: error.message || String(error) }))
       ]);
       source = sourceDetail || sourceSummary;
       recentExamples = Array.isArray(sourceExamples) ? sourceExamples.slice(0, 5).map((item) => ({
@@ -611,7 +679,36 @@ async function getPrismWorkbenchState(settings) {
         received_at: item.receivedAt || null,
         payload: item.payload
       })) : [];
+      if (trackingRules && trackingRules.__fetch_error) {
+        trackingRulesFetchError = trackingRules.__fetch_error;
+      } else if (typeof trackingRules === "string") {
+        trackingRulesCode = trackingRules;
+      } else if (trackingRules && typeof trackingRules.code === "string") {
+        trackingRulesCode = trackingRules.code;
+      }
+      // The transform function's code is not exposed via a dedicated GET; it comes
+      // back inlined on the source detail, using the same `code` field name the
+      // create/update payloads use (see ingestion.md's webhook-source.json shape).
+      source = Object.assign({}, source, {
+        trackingRulesCode: trackingRulesCode || "",
+        trackingRulesFetchError,
+        functionCode: (source && (source.code || source.functionCode)) || ""
+      });
     }
+
+    // Event routing is a separate concern from ingestion: a Pipe connects this
+    // Source to one Event Destination and may reshape/filter events in transit.
+    const destinationsById = new Map((eventDestinations || []).map((item) => [item.id, item]));
+    const routing = (source && source.id ? (allPipes || []).filter((pipe) => pipe.sourceId === source.id) : []).map((pipe) => {
+      const destination = destinationsById.get(pipe.eventDestinationId) || null;
+      return {
+        id: pipe.id,
+        name: pipe.name,
+        isEnabled: pipe.isEnabled !== false,
+        destination: destination ? { id: destination.id, name: destination.name, isEnabled: destination.isEnabled !== false } : null
+      };
+    });
+
     const value = {
       ok: true,
       configured: true,
@@ -620,10 +717,14 @@ async function getPrismWorkbenchState(settings) {
       source,
       event_types: source && Array.isArray(source.eventTypes) ? source.eventTypes : [],
       recent_examples: recentExamples,
+      routing,
       identifier_types: Array.isArray(identifierTypes) ? identifierTypes.map((item) => ({
         id: item.id,
-        name: item.name
-      })) : []
+        name: item.name,
+        maxIdentifiers: item.maxIdentifiers === undefined ? null : item.maxIdentifiers,
+        priority: item.priority === undefined ? null : item.priority
+      })) : [],
+      error: resolutionError
     };
     prismMetadataCache.set(cacheKey, { created_at: Date.now(), value });
     return value;
@@ -721,7 +822,7 @@ async function syncPrismEventTypeFromEvent(eventType, payload, verify) {
   }
 
   const mergedRules = mergeIdentifierRules(existing.identifierRules || [], inferredRules);
-  const normalizedExistingSchema = normalizeJsonSchemaTypes(existing.jsonSchema);
+  const normalizedExistingSchema = shared.normalizeJsonSchemaTypes(existing.jsonSchema);
   const hasSchema = normalizedExistingSchema !== null && normalizedExistingSchema !== undefined;
   const changedRules = mergedRules.length !== (existing.identifierRules || []).length;
   const shouldUpdateSchema = !hasSchema && Boolean(inferredSchema);
@@ -787,6 +888,20 @@ async function updatePrismEventType(eventTypeId, updates) {
   });
   clearPrismCache();
   return { ok: true, event_type: updated };
+}
+
+async function deletePrismEventType(eventTypeId) {
+  const id = String(eventTypeId || "").trim();
+  if (!id) {
+    throw new Error("Event Type id is required.");
+  }
+
+  const sourceContext = await getResolvedPrismSourceContext();
+  await prismApiRequest(sourceContext.connection, sourceContext.pipes.base_url, `/api/event-streams/${sourceContext.pipes.source.id}/event-types/${id}`, {
+    method: "DELETE"
+  });
+  clearPrismCache();
+  return { ok: true };
 }
 
 async function testPrismSource(payload, headers) {
@@ -881,6 +996,25 @@ async function savePrismSourceFunction(code) {
     method: "PUT",
     body: JSON.stringify({ code: nextCode })
   });
+  clearPrismCache();
+  return { ok: true, result };
+}
+
+async function getPipeDeliveries(pipeId) {
+  if (!pipeId) {
+    throw new Error("Missing pipe id.");
+  }
+  const sourceContext = await getResolvedPrismSourceContext();
+  const deliveries = await prismApiRequest(sourceContext.connection, sourceContext.pipes.base_url, `/api/pipes/${pipeId}/deliveries`);
+  return { ok: true, deliveries: Array.isArray(deliveries) ? deliveries.slice(0, 20) : deliveries };
+}
+
+async function togglePrismPipe(pipeId) {
+  if (!pipeId) {
+    throw new Error("Missing pipe id.");
+  }
+  const sourceContext = await getResolvedPrismSourceContext();
+  const result = await prismApiRequest(sourceContext.connection, sourceContext.pipes.base_url, `/api/pipes/${pipeId}/toggle`, { method: "PUT" });
   clearPrismCache();
   return { ok: true, result };
 }
@@ -1123,72 +1257,7 @@ function inferEventTypeJsonSchema(payload) {
   if (sample === undefined) {
     return null;
   }
-  return inferJsonSchemaFromSample(sample);
-}
-
-function normalizeJsonSchemaTypes(schema) {
-  if (schema === null || schema === undefined) {
-    return schema;
-  }
-  if (Array.isArray(schema)) {
-    return schema.map(normalizeJsonSchemaTypes);
-  }
-  if (!schema || typeof schema !== "object") {
-    return schema;
-  }
-
-  const normalized = {};
-  Object.entries(schema).forEach(([key, value]) => {
-    if (key === "type") {
-      normalized[key] = normalizeJsonSchemaTypeValue(value);
-      return;
-    }
-    normalized[key] = normalizeJsonSchemaTypes(value);
-  });
-  return normalized;
-}
-
-function normalizeJsonSchemaTypeValue(value) {
-  if (Array.isArray(value)) {
-    return value.map(normalizeJsonSchemaTypeValue);
-  }
-  if (!value) {
-    return value;
-  }
-  const type = String(value).toLowerCase();
-  return type === "integer" || type === "number" || type === "string" || type === "boolean" || type === "object" || type === "array" || type === "null"
-    ? type
-    : value;
-}
-
-function inferJsonSchemaFromSample(value) {
-  if (Array.isArray(value)) {
-    const firstDefined = value.find((item) => item !== undefined);
-    return {
-      type: "array",
-      items: firstDefined === undefined ? {} : inferJsonSchemaFromSample(firstDefined)
-    };
-  }
-  if (value && typeof value === "object") {
-    const properties = {};
-    Object.entries(value).forEach(([key, childValue]) => {
-      properties[key] = inferJsonSchemaFromSample(childValue);
-    });
-    return {
-      type: "object",
-      properties
-    };
-  }
-  if (typeof value === "number") {
-    return { type: Number.isInteger(value) ? "integer" : "number" };
-  }
-  if (typeof value === "boolean") {
-    return { type: "boolean" };
-  }
-  if (value === null) {
-    return { type: "null" };
-  }
-  return { type: "string" };
+  return shared.inferJsonSchemaFromSample(sample);
 }
 
 function normalizePrismEventTypePayload(existing, updates) {
@@ -1205,7 +1274,7 @@ function normalizePrismEventTypePayload(existing, updates) {
     }));
 
   return {
-    jsonSchema: normalizeJsonSchemaTypes(updates && Object.prototype.hasOwnProperty.call(updates, "jsonSchema")
+    jsonSchema: shared.normalizeJsonSchemaTypes(updates && Object.prototype.hasOwnProperty.call(updates, "jsonSchema")
       ? updates.jsonSchema
       : (existing.jsonSchema === undefined ? null : existing.jsonSchema)),
     identifierRules: normalizedRules

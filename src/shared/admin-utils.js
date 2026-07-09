@@ -143,7 +143,7 @@
 
     return [
       { label: "Tracking enabled", ok: Boolean(settings.tracking_enabled), detail: settings.tracking_enabled ? "Global sending is enabled." : "Global sending is disabled." },
-      { label: "Tab live", ok: Boolean(page && page.active), detail: page && page.active ? `Live collection started at ${page.started_at || "unknown time"}.` : "This page is not currently collecting live signals." },
+      { label: "Tab live", ok: Boolean(page && page.active), detail: page && page.active ? `Live collection started at ${shared.formatTimestamp(page.started_at)}.` : "This page is not currently collecting live signals." },
       { label: "Endpoint configured", ok: shared.isValidHttpUrl(settings.collection_endpoint), detail: settings.collection_endpoint || "Missing endpoint." },
       { label: "User ID configured", ok: Boolean(settings.user_id), detail: settings.user_id || "Missing user_id." },
       { label: "SDK configured", ok: shared.isValidHttpUrl(settings.sdk_source_url), detail: settings.sdk_source_url || "Missing SDK URL." },
@@ -186,7 +186,81 @@
     if (entry && entry.status && entry.status >= 400) {
       suggestions.push("Inspect the endpoint response and compare the payload against the Event Router contract.");
     }
+    if (entry && entry.event_type && shared.GA4_STANDARD_EVENT_NAMES && !shared.GA4_STANDARD_EVENT_NAMES.includes(entry.event_type)) {
+      suggestions.push(`"${entry.event_type}" is not in the Web SDK's predefined event vocabulary. It will not be forwarded to a real mpt.js SDK in inject_sdk/hybrid mode.`);
+    }
     return suggestions;
+  }
+
+  function inferJsonSchemaFromSample(value) {
+    if (Array.isArray(value)) {
+      const firstDefined = value.find((item) => item !== undefined);
+      return {
+        type: "array",
+        items: firstDefined === undefined ? {} : inferJsonSchemaFromSample(firstDefined)
+      };
+    }
+    if (value && typeof value === "object") {
+      const properties = {};
+      Object.entries(value).forEach(([key, childValue]) => {
+        properties[key] = inferJsonSchemaFromSample(childValue);
+      });
+      return {
+        type: "object",
+        properties
+      };
+    }
+    if (typeof value === "number") {
+      return { type: Number.isInteger(value) ? "integer" : "number" };
+    }
+    if (typeof value === "boolean") {
+      return { type: "boolean" };
+    }
+    if (value === null) {
+      return { type: "null" };
+    }
+    return { type: "string" };
+  }
+
+  function normalizeJsonSchemaTypeValue(value) {
+    if (Array.isArray(value)) {
+      return value.map(normalizeJsonSchemaTypeValue);
+    }
+    if (!value) {
+      return value;
+    }
+    const type = String(value).toLowerCase();
+    return type === "integer" || type === "number" || type === "string" || type === "boolean" || type === "object" || type === "array" || type === "null"
+      ? type
+      : value;
+  }
+
+  function normalizeJsonSchemaTypes(schema) {
+    if (schema === null || schema === undefined) {
+      return schema;
+    }
+    if (Array.isArray(schema)) {
+      return schema.map(normalizeJsonSchemaTypes);
+    }
+    if (!schema || typeof schema !== "object") {
+      return schema;
+    }
+
+    const normalized = {};
+    Object.entries(schema).forEach(([key, value]) => {
+      normalized[key] = key === "type" ? normalizeJsonSchemaTypeValue(value) : normalizeJsonSchemaTypes(value);
+    });
+    return normalized;
+  }
+
+  function extractTrackedEventNames(trackingRulesCode) {
+    const matches = String(trackingRulesCode || "").matchAll(/sdk\.track\(\s*["']([^"']+)["']/g);
+    return Array.from(new Set(Array.from(matches, (match) => match[1])));
+  }
+
+  function findNonStandardTrackedEventNames(trackingRulesCode, standardNames) {
+    const allowed = standardNames || (shared.GA4_STANDARD_EVENT_NAMES || []);
+    return extractTrackedEventNames(trackingRulesCode).filter((name) => !allowed.includes(name));
   }
 
   function summarizeValidationEntry(entry) {
@@ -428,6 +502,11 @@
     buildTimeline,
     summarizeWebLayers,
     webLayerLabel,
-    diffEvents
+    diffEvents,
+    extractTrackedEventNames,
+    findNonStandardTrackedEventNames,
+    inferJsonSchemaFromSample,
+    normalizeJsonSchemaTypeValue,
+    normalizeJsonSchemaTypes
   });
 })(globalThis);

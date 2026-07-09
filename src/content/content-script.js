@@ -16,7 +16,8 @@
     webLayerSignals: [],
     initialPageViewSent: false,
     pickerSelection: null,
-    pickerCleanup: null
+    pickerCleanup: null,
+    ruleErrorsLogged: new Set()
   };
 
   root.__MEIRO_EVENT_SIMULATOR_CONTENT__ = state;
@@ -86,6 +87,7 @@
     state.requestSignals = [];
     state.webLayerSignals = [];
     state.initialPageViewSent = false;
+    state.ruleErrorsLogged = new Set();
 
     installPageBridge(() => {
       configurePageBridge();
@@ -151,6 +153,7 @@
         collectionEndpoint: state.settings.collection_endpoint,
         consentOverride: state.settings.consent_override,
         sendingAllowed: state.settings.sending_allowed,
+        consent: state.settings.consent,
         enableWebLayers: state.settings.enable_web_layers !== false,
         dataLayerNames: state.settings.data_layer_names || [],
         observeTrackingRequests: state.settings.observe_tracking_requests !== false
@@ -194,7 +197,7 @@
       }
 
       if (state.settings.capture_file_downloads && clickMetadata.file_download) {
-        sendPayload(shared.buildCustom(state.identity, state.settings, "file_download_click", clickMetadata));
+        sendPayload(shared.buildCustom(state.identity, state.settings, "file_download", clickMetadata));
       }
 
       evaluateSelectorRules(element, event);
@@ -215,6 +218,11 @@
       if (!state.active) {
         return;
       }
+
+      // A SPA navigation is effectively a new page; scroll depth on the next
+      // page should be measured from zero, not blocked by thresholds already
+      // sent for the previous page.
+      state.scrollDepthsSent = new Set();
 
       if (state.routeTimer) {
         clearTimeout(state.routeTimer);
@@ -282,7 +290,19 @@
       let matched = null;
       try {
         matched = element.matches(rule.selector) ? element : element.closest(rule.selector);
-      } catch (_error) {
+      } catch (error) {
+        const key = rule.id || rule.selector;
+        if (!state.ruleErrorsLogged.has(key)) {
+          state.ruleErrorsLogged.add(key);
+          shared.debugLog(state.settings, "Selector rule has an invalid selector", { rule_id: rule.id, selector: rule.selector, error: error.message });
+          chrome.runtime.sendMessage({
+            type: "RULE_ERROR",
+            ruleId: rule.id,
+            ruleName: rule.name,
+            selector: rule.selector,
+            error: error.message || String(error)
+          });
+        }
         return;
       }
 
@@ -323,11 +343,59 @@
   }
 
   function sendPayload(payload) {
-    const sdkMode = state.settings.mode === shared.MODES.INJECT_SDK || state.settings.mode === shared.MODES.HYBRID;
-    if (sdkMode) {
-      root.dispatchEvent(new CustomEvent("meiro-extension:sdk-event", { detail: payload }));
+    const mode = state.settings.mode;
+    const forwardToSdk = mode === shared.MODES.INJECT_SDK || mode === shared.MODES.HYBRID;
+    // inject_sdk means "only test what the real SDK would actually send" — the
+    // extension's own direct POST is skipped there so a real Pipes source never
+    // sees duplicate/conflicting traffic for the same user interaction.
+    const sendDirect = mode === shared.MODES.SIMULATE_ONLY || mode === shared.MODES.HYBRID;
+
+    if (forwardToSdk) {
+      forwardToPageBridge(payload, sendDirect);
     }
 
+    if (sendDirect) {
+      sendViaExtensionTransport(payload);
+    }
+  }
+
+  function forwardToPageBridge(payload, hasDirectFallback) {
+    const requestId = shared.uuid();
+    const timeout = setTimeout(() => {
+      root.removeEventListener("meiro-extension:sdk-forward-result", onResult);
+      if (!hasDirectFallback) {
+        logSdkForwardOutcome(payload, {
+          attempted: false,
+          ok: false,
+          reason: "No response from the page bridge (script may be blocked by page CSP)."
+        });
+      }
+    }, 400);
+
+    function onResult(event) {
+      if (!event.detail || event.detail.requestId !== requestId) {
+        return;
+      }
+      clearTimeout(timeout);
+      root.removeEventListener("meiro-extension:sdk-forward-result", onResult);
+      if (!hasDirectFallback) {
+        logSdkForwardOutcome(payload, event.detail);
+      }
+    }
+
+    root.addEventListener("meiro-extension:sdk-forward-result", onResult);
+    root.dispatchEvent(new CustomEvent("meiro-extension:sdk-event", {
+      detail: Object.assign({ requestId }, payload)
+    }));
+  }
+
+  function logSdkForwardOutcome(payload, outcome) {
+    chrome.runtime.sendMessage({ type: "SDK_FORWARD_LOG", payload, outcome }, () => {
+      shared.debugLog(state.settings, "SDK forward outcome", { type: payload.type, outcome });
+    });
+  }
+
+  function sendViaExtensionTransport(payload) {
     chrome.runtime.sendMessage({ type: "MEIRO_EVENT", payload }, (response) => {
       if (chrome.runtime.lastError) {
         shared.debugLog(state.settings, "Failed to send event", chrome.runtime.lastError.message);

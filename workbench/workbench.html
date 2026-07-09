@@ -246,6 +246,13 @@
             </div>
             <div id="pipesControl" class="stack"></div>
           </section>
+          <section class="card">
+            <div class="card-header">
+              <h3>Routing (Pipes → Event Destinations)</h3>
+              <p>Where events from this source are sent onward, separate from ingestion/Event Types above.</p>
+            </div>
+            <div id="pipesRouting" class="stack"></div>
+          </section>
           <div class="split">
             <section class="card">
               <div class="card-header">
@@ -255,6 +262,7 @@
                   <button id="saveTrackingRulesButton" type="button">Save</button>
                 </div>
               </div>
+              <p id="trackingRulesStatus" class="field-note"></p>
               <textarea id="trackingRulesEditor" spellcheck="false"></textarea>
             </section>
             <section class="card">

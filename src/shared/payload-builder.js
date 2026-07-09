@@ -79,7 +79,9 @@
   }
 
   function buildScrollDepth(identity, settings, depthPercent) {
-    return baseEvent("scroll_depth", identity, settings, pagePayload({
+    // "scroll" is the real Web SDK's predefined event name (see GA4_STANDARD_EVENT_NAMES);
+    // depth_percent is extension-specific detail carried in custom_payload.
+    return baseEvent("scroll", identity, settings, pagePayload({
       depth_percent: depthPercent
     }));
   }

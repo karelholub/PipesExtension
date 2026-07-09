@@ -152,6 +152,16 @@ select:focus-visible {
   color: #ffffff !important;
 }
 
+button.danger {
+  border-color: #f4b8b2;
+  color: #b42318;
+}
+
+button.danger:hover {
+  background: #fdecea;
+  border-color: #b42318;
+}
+
 .sidebar-box {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 8px;
@@ -235,6 +245,16 @@ select:focus-visible {
 .item-meta,
 .muted {
   color: #607080;
+}
+
+.field-note {
+  margin: -4px 0 8px;
+  font-size: 12px;
+  color: #b42318;
+}
+
+.field-note:empty {
+  display: none;
 }
 
 .grid,

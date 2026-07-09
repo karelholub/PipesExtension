@@ -1,6 +1,7 @@
 (async function initDebugLog() {
   "use strict";
 
+  const shared = MeiroTrackerShared;
   const list = document.getElementById("logList");
   const refreshButton = document.getElementById("refreshButton");
   const workbenchButton = document.getElementById("workbenchButton");
@@ -47,7 +48,7 @@
       const title = document.createElement("div");
       title.innerHTML = `<span class="event-type"></span> <span class="meta"></span>`;
       title.querySelector(".event-type").textContent = entry.event_type;
-      title.querySelector(".meta").textContent = `${entry.timestamp} · tab ${entry.tabId || "-"}`;
+      title.querySelector(".meta").textContent = `${shared.formatTimestamp(entry.timestamp)} · tab ${entry.tabId || "-"}`;
 
       const status = document.createElement("span");
       status.className = `status${entry.ok ? " ok" : ""}`;

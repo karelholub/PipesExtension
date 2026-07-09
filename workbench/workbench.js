@@ -47,7 +47,9 @@
     deliveryStatus: document.getElementById("deliveryStatus"),
     contractsEditor: document.getElementById("contractsEditor"),
     pipesControl: document.getElementById("pipesControl"),
+    pipesRouting: document.getElementById("pipesRouting"),
     trackingRulesEditor: document.getElementById("trackingRulesEditor"),
+    trackingRulesStatus: document.getElementById("trackingRulesStatus"),
     generateTrackingRulesButton: document.getElementById("generateTrackingRulesButton"),
     saveTrackingRulesButton: document.getElementById("saveTrackingRulesButton"),
     sourceFunctionEditor: document.getElementById("sourceFunctionEditor"),
@@ -80,7 +82,8 @@
   const sourceDraftState = {
     sourceId: null,
     trackingRulesCode: "",
-    sourceFunctionCode: ""
+    sourceFunctionCode: "",
+    trackingRulesWarningAcknowledged: false
   };
   const pipesActionResults = new Map();
 
@@ -115,6 +118,7 @@
   els.runSourceTestButton.addEventListener("click", safeAction(runSourceTest));
   els.trackingRulesEditor.addEventListener("input", () => {
     sourceDraftState.trackingRulesCode = els.trackingRulesEditor.value;
+    sourceDraftState.trackingRulesWarningAcknowledged = false;
   });
   els.sourceFunctionEditor.addEventListener("input", () => {
     sourceDraftState.sourceFunctionCode = els.sourceFunctionEditor.value;
@@ -359,8 +363,8 @@
 
     renderStack(els.rulesList, (state.settings.selector_rules || []).map((rule, index) => selectorRuleCard(rule, index)));
     renderStack(els.recipeList, (state.recipes || []).map((recipe) => recipeCard(recipe, selection)));
-    renderStack(els.formsList, (page.forms || []).map((form) => compactJsonCard(form.selector || "form", form)));
-    renderStack(els.interactiveList, (page.interactive || []).map((item) => compactJsonCard(item.selector || item.tag || "element", item)));
+    renderStack(els.formsList, (page.forms || []).map((form) => jsonCard(form.selector || "form", form)));
+    renderStack(els.interactiveList, (page.interactive || []).map((item) => jsonCard(item.selector || item.tag || "element", item)));
   }
 
   function renderValidation() {
@@ -394,9 +398,57 @@
       return;
     }
     renderPipesControl();
+    renderPipesRouting();
     renderSourceEditors();
     renderSourceTest();
     renderPipesEventTypes();
+  }
+
+  function renderPipesRouting() {
+    const pipes = state.pipes || {};
+    const routing = Array.isArray(pipes.routing) ? pipes.routing : [];
+    if (!pipes.source) {
+      renderStack(els.pipesRouting, [], "Resolve a Pipes source above to see its routing.");
+      return;
+    }
+    renderStack(els.pipesRouting, routing.map((pipe) => pipeRoutingCard(pipe)), "No Pipes route events out of this source yet. Create one in Pipes under Delivery to send events onward.");
+  }
+
+  function pipeRoutingCard(pipe) {
+    const article = itemCard({
+      detailKey: `pipe-routing:${pipe.id}`,
+      title: `${pipe.name} -> ${pipe.destination ? pipe.destination.name : "unknown destination"}`,
+      meta: pipe.destination
+        ? `Destination ${pipe.destination.isEnabled ? "enabled" : "disabled"}`
+        : "Destination could not be resolved (may have been deleted)."
+    });
+    const buttons = article.querySelector(".inline-buttons");
+    buttons.appendChild(pill(pipe.isEnabled ? "enabled" : "disabled", pipe.isEnabled ? "good" : "bad"));
+
+    const toggleButton = document.createElement("button");
+    toggleButton.type = "button";
+    toggleButton.textContent = pipe.isEnabled ? "Disable" : "Enable";
+    toggleButton.addEventListener("click", safeAction(async () => {
+      const response = await runtimeMessage({ type: "TOGGLE_PRISM_PIPE", pipeId: pipe.id });
+      setMessage(response.ok ? `Pipe "${pipe.name}" ${pipe.isEnabled ? "disabled" : "enabled"}.` : response.error, !response.ok);
+      await load();
+    }));
+    buttons.appendChild(toggleButton);
+
+    const deliveriesButton = document.createElement("button");
+    deliveriesButton.type = "button";
+    deliveriesButton.textContent = "View deliveries";
+    deliveriesButton.addEventListener("click", safeAction(async () => {
+      const response = await runtimeMessage({ type: "GET_PIPE_DELIVERIES", pipeId: pipe.id });
+      const body = article.querySelector(".item-body");
+      body.textContent = "";
+      body.appendChild(response.ok
+        ? jsonCard("Recent deliveries", response.deliveries)
+        : subtleBox(response.error || "Could not load deliveries."));
+    }));
+    buttons.appendChild(deliveriesButton);
+
+    return article;
   }
 
   function renderProfiles() {
@@ -503,6 +555,17 @@
 
   async function saveTrackingRules() {
     sourceDraftState.trackingRulesCode = els.trackingRulesEditor.value;
+    const nonStandard = shared.findNonStandardTrackedEventNames(sourceDraftState.trackingRulesCode);
+    if (nonStandard.length && !sourceDraftState.trackingRulesWarningAcknowledged) {
+      sourceDraftState.trackingRulesWarningAcknowledged = true;
+      setMessage(
+        `sdk.track() uses non-standard event name(s): ${nonStandard.join(", ")}. The real Web SDK rejects unknown event names in visitors' browsers before they ever reach Pipes. Click Save again to save anyway.`,
+        true
+      );
+      return;
+    }
+
+    sourceDraftState.trackingRulesWarningAcknowledged = false;
     const response = await runtimeMessage({
       type: "SAVE_PRISM_TRACKING_RULES",
       code: sourceDraftState.trackingRulesCode
@@ -531,8 +594,16 @@
     }
 
     sourceDraftState.trackingRulesCode = buildTrackingRulesCode(rules);
+    sourceDraftState.trackingRulesWarningAcknowledged = false;
     els.trackingRulesEditor.value = sourceDraftState.trackingRulesCode;
-    setMessage("Generated tracking rules from local selector rules. Review before saving to Pipes.");
+
+    const nonStandard = shared.findNonStandardTrackedEventNames(sourceDraftState.trackingRulesCode);
+    setMessage(
+      nonStandard.length
+        ? `Generated tracking rules from local selector rules. Non-standard event name(s) ${nonStandard.join(", ")} will be rejected by the real Web SDK — rename them or map to a predefined event before saving.`
+        : "Generated tracking rules from local selector rules. Review before saving to Pipes.",
+      nonStandard.length > 0
+    );
   }
 
   function exportSetup() {
@@ -776,7 +847,7 @@
       : pill(item.kind.replace(/_/g, " "), "warn");
     article.innerHTML = `<div class="timeline-head"><div><div class="timeline-kind"></div><div class="item-meta"></div></div></div><div class="timeline-body"></div>`;
     article.querySelector(".timeline-kind").textContent = item.label;
-    article.querySelector(".item-meta").textContent = `${item.timestamp || "unknown time"} · ${item.detail || ""}`;
+    article.querySelector(".item-meta").textContent = `${shared.formatTimestamp(item.timestamp)} · ${item.detail || ""}`;
     article.querySelector(".timeline-head").appendChild(labelPill);
 
     const body = article.querySelector(".timeline-body");
@@ -841,11 +912,11 @@
 
   function selectorRuleCard(rule, index) {
     const score = shared.selectorScore(rule.selector);
-    const article = document.createElement("article");
-    article.className = "item";
-    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><pre></pre>`;
-    article.querySelector(".item-title").textContent = `${rule.event_type} · ${rule.name || rule.selector}`;
-    article.querySelector(".item-meta").textContent = `Selector score ${score.score}. ${score.warnings.join(" ")}`;
+    const article = itemCard({
+      body: "pre",
+      title: `${rule.event_type} · ${rule.name || rule.selector}`,
+      meta: `Selector score ${score.score}. ${score.warnings.join(" ")}`
+    });
     article.querySelector("pre").textContent = JSON.stringify(rule, null, 2);
     const buttons = article.querySelector(".inline-buttons");
     buttons.appendChild(pill(rule.enabled !== false ? "enabled" : "disabled", rule.enabled !== false ? "good" : "bad"));
@@ -862,13 +933,12 @@
   }
 
   function validationCard(entry) {
-    const article = document.createElement("article");
-    article.className = "item";
-    article.dataset.detailKey = `validation:${entry.id || entry.event_type || ""}`;
     const summary = entry.validation_summary || shared.summarizeValidationEntry(entry);
-    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="item-body"></div>`;
-    article.querySelector(".item-title").textContent = entry.event_type;
-    article.querySelector(".item-meta").textContent = `${entry.timestamp} · ${entry.payload && entry.payload.payload ? entry.payload.payload.page_url || "" : ""}`;
+    const article = itemCard({
+      detailKey: `validation:${entry.id || entry.event_type || ""}`,
+      title: entry.event_type,
+      meta: `${shared.formatTimestamp(entry.timestamp)} · ${entry.payload && entry.payload.payload ? entry.payload.payload.page_url || "" : ""}`
+    });
     article.querySelector(".inline-buttons").appendChild(pill(summary.label, summary.severity === "pass" ? "good" : (summary.severity === "warn" ? "warn" : "bad")));
     const body = article.querySelector(".item-body");
     const actionResultKey = pipesActionKey(entry);
@@ -929,32 +999,7 @@
       const syncButton = document.createElement("button");
       syncButton.type = "button";
       syncButton.textContent = pipesEventTypeExists(entry.event_type) ? "Sync Pipes definition" : "Define in Pipes";
-      syncButton.addEventListener("click", safeAction(async () => {
-        setPipesActionResult(actionResultKey, { status: "pending", label: "Syncing Pipes definition and verifying source output." });
-        renderValidation();
-        const response = await runtimeMessage({
-          type: "SYNC_PRISM_EVENT_TYPE_FROM_EVENT",
-          eventType: entry.event_type,
-          payload: entry.payload,
-          verify: true
-        });
-        if (response.ok) {
-          setPipesActionResult(actionResultKey, {
-            status: response.verification && response.verification.ok ? "ok" : "error",
-            label: `${pipesSyncMessage(entry.event_type, response)} ${pipesVerificationMessage(response.verification)}`,
-            detail: {
-              action: response.action,
-              inferred: response.inferred,
-              verification: response.verification || null
-            }
-          });
-          setMessage(`${pipesSyncMessage(entry.event_type, response)} ${pipesVerificationMessage(response.verification)}`);
-        } else {
-          setPipesActionResult(actionResultKey, { status: "error", label: response.error });
-          setMessage(response.error, true);
-        }
-        await load();
-      }));
+      syncButton.addEventListener("click", safeAction(() => syncPipesEventType(entry.event_type, entry.payload, actionResultKey)));
       actions.appendChild(syncButton);
     }
     body.appendChild(actions);
@@ -967,12 +1012,11 @@
   }
 
   function deliveryCard(entry) {
-    const article = document.createElement("article");
-    article.className = "item";
-    article.dataset.detailKey = `delivery:${entry.id || entry.event_type || ""}`;
-    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="item-body"></div>`;
-    article.querySelector(".item-title").textContent = `${entry.event_type} -> ${entry.endpoint || "endpoint"}`;
-    article.querySelector(".item-meta").textContent = `${entry.timestamp} · ${entry.ok ? "success" : "issue"}${entry.status ? ` · HTTP ${entry.status}` : ""}`;
+    const article = itemCard({
+      detailKey: `delivery:${entry.id || entry.event_type || ""}`,
+      title: `${entry.event_type} -> ${entry.endpoint || "endpoint"}`,
+      meta: `${shared.formatTimestamp(entry.timestamp)} · ${entry.ok ? "success" : "issue"}${entry.status ? ` · HTTP ${entry.status}` : ""}`
+    });
     article.querySelector(".inline-buttons").appendChild(pill(entry.ok ? "sent" : "issue", entry.ok ? "good" : "bad"));
     const body = article.querySelector(".item-body");
     if (entry.error) {
@@ -996,12 +1040,11 @@
   }
 
   function pipesSetupCard(item) {
-    const article = document.createElement("article");
-    article.className = "item";
-    article.dataset.detailKey = `pipes-setup:${item.event_type}`;
-    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="item-body"></div>`;
-    article.querySelector(".item-title").textContent = item.event_type;
-    article.querySelector(".item-meta").textContent = `${item.count} captured · ${item.fail_count} issue(s) · last seen ${item.last_seen_at || "n/a"}`;
+    const article = itemCard({
+      detailKey: `pipes-setup:${item.event_type}`,
+      title: item.event_type,
+      meta: `${item.count} captured · ${item.fail_count} issue(s) · last seen ${item.last_seen_at ? shared.formatTimestamp(item.last_seen_at) : "n/a"}`
+    });
     article.querySelector(".inline-buttons").appendChild(pill(item.exists ? "defined" : "missing", item.exists ? "good" : "bad"));
     if (item.has_unknown_type_error) {
       article.querySelector(".inline-buttons").appendChild(pill("router rejected", "bad"));
@@ -1022,32 +1065,7 @@
     syncButton.type = "button";
     syncButton.textContent = item.exists ? "Sync definition" : "Create definition";
     syncButton.disabled = !item.sample || !canSyncPipesEventType(item.sample);
-    syncButton.addEventListener("click", safeAction(async () => {
-      setPipesActionResult(actionResultKey, { status: "pending", label: "Syncing Pipes definition and verifying source output." });
-      renderValidation();
-      const response = await runtimeMessage({
-        type: "SYNC_PRISM_EVENT_TYPE_FROM_EVENT",
-        eventType: item.event_type,
-        payload: item.sample.payload,
-        verify: true
-      });
-      if (response.ok) {
-        setPipesActionResult(actionResultKey, {
-          status: response.verification && response.verification.ok ? "ok" : "error",
-          label: `${pipesSyncMessage(item.event_type, response)} ${pipesVerificationMessage(response.verification)}`,
-          detail: {
-            action: response.action,
-            inferred: response.inferred,
-            verification: response.verification || null
-          }
-        });
-        setMessage(`${pipesSyncMessage(item.event_type, response)} ${pipesVerificationMessage(response.verification)}`);
-      } else {
-        setPipesActionResult(actionResultKey, { status: "error", label: response.error });
-        setMessage(response.error, true);
-      }
-      await load();
-    }));
+    syncButton.addEventListener("click", safeAction(() => syncPipesEventType(item.event_type, item.sample && item.sample.payload, actionResultKey)));
     actions.appendChild(syncButton);
     body.appendChild(actions);
     appendPipesActionResult(body, actionResultKey);
@@ -1055,11 +1073,11 @@
   }
 
   function sourceTestSummaryCard(summary) {
-    const article = document.createElement("article");
-    article.className = "item";
-    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="kv"></div>`;
-    article.querySelector(".item-title").textContent = summary.ok ? "Source test passed" : "Source test needs attention";
-    article.querySelector(".item-meta").textContent = `${summary.event_count} emitted event(s) · ${summary.valid_event_count} valid · ${summary.identifier_count} identifier(s)`;
+    const article = itemCard({
+      body: "kv",
+      title: summary.ok ? "Source test passed" : "Source test needs attention",
+      meta: `${summary.event_count} emitted event(s) · ${summary.valid_event_count} valid · ${summary.identifier_count} identifier(s)`
+    });
     article.querySelector(".inline-buttons").appendChild(pill(summary.ok ? "PASS" : "CHECK", summary.ok ? "good" : "bad"));
     const fields = article.querySelector(".kv");
     fields.appendChild(kvBox("Events", summary.event_types.join(", ") || "none"));
@@ -1070,13 +1088,12 @@
 
   function sourceTestEventCard(event, index, validation) {
     const result = sourceTestEventResult(index, validation);
-    const article = document.createElement("article");
-    article.className = "item";
-    article.dataset.detailKey = `source-test-event:${index}`;
-    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="item-body"></div>`;
     const eventType = event && (event.event_type || event.type) ? (event.event_type || event.type) : (result && result.eventType) || `event ${index + 1}`;
-    article.querySelector(".item-title").textContent = eventType;
-    article.querySelector(".item-meta").textContent = `Output event ${index + 1}`;
+    const article = itemCard({
+      detailKey: `source-test-event:${index}`,
+      title: eventType,
+      meta: `Output event ${index + 1}`
+    });
     article.querySelector(".inline-buttons").appendChild(pill(result && result.ok === false ? "FAIL" : "READY", result && result.ok === false ? "bad" : "good"));
     const body = article.querySelector(".item-body");
     const fields = document.createElement("div");
@@ -1085,12 +1102,12 @@
     fields.appendChild(kvBox("Errors", result && Array.isArray(result.errors) ? result.errors.length : 0));
     body.appendChild(fields);
     if (result && Array.isArray(result.identifiers) && result.identifiers.length) {
-      body.appendChild(compactJsonCard("Identifiers", result.identifiers));
+      body.appendChild(jsonCard("Identifiers", result.identifiers));
     }
     if (result && Array.isArray(result.errors) && result.errors.length) {
-      body.appendChild(compactJsonCard("Errors", result.errors));
+      body.appendChild(jsonCard("Errors", result.errors));
     }
-    body.appendChild(compactJsonCard("Event payload", event));
+    body.appendChild(jsonCard("Event payload", event));
     return article;
   }
 
@@ -1171,11 +1188,11 @@
   }
 
   function profileCard(profile) {
-    const article = document.createElement("article");
-    article.className = "item";
-    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><pre></pre>`;
-    article.querySelector(".item-title").textContent = profile.name;
-    article.querySelector(".item-meta").textContent = profile.created_at || profile.settings.collection_endpoint || "";
+    const article = itemCard({
+      body: "pre",
+      title: profile.name,
+      meta: profile.created_at ? shared.formatTimestamp(profile.created_at) : (profile.settings.collection_endpoint || "")
+    });
     article.querySelector("pre").textContent = JSON.stringify({
       collection_endpoint: profile.settings.collection_endpoint,
       sdk_source_url: profile.settings.sdk_source_url,
@@ -1195,11 +1212,10 @@
   }
 
   function prismEventTypeCard(eventType) {
-    const article = document.createElement("article");
-    article.className = "item";
-    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="item-body"></div>`;
-    article.querySelector(".item-title").textContent = eventType.name;
-    article.querySelector(".item-meta").textContent = `version ${eventType.version || "n/a"} · ${(eventType.identifierRules || []).length} identifier rule(s)`;
+    const article = itemCard({
+      title: eventType.name,
+      meta: `version ${eventType.version || "n/a"} · ${(eventType.identifierRules || []).length} identifier rule(s)`
+    });
     const body = article.querySelector(".item-body");
     const actions = article.querySelector(".inline-buttons");
 
@@ -1239,7 +1255,7 @@
         setMessage("No sample payload is available to infer a schema.", true);
         return;
       }
-      schemaField.input.value = JSON.stringify(inferJsonSchemaFromSample(sample.payload), null, 2);
+      schemaField.input.value = JSON.stringify(shared.inferJsonSchemaFromSample(sample.payload), null, 2);
       previewEventTypeConfig(eventType, schemaField.input.value, rulesField.input.value, previewOutput);
       setMessage(`Inferred schema from ${sample.source}. Review before saving.`);
     });
@@ -1253,7 +1269,7 @@
           type: "UPDATE_PRISM_EVENT_TYPE",
           eventTypeId: eventType.id,
           updates: {
-            jsonSchema: normalizeJsonSchemaTypes(parseNullableJson(schemaField.input.value)),
+            jsonSchema: shared.normalizeJsonSchemaTypes(parseNullableJson(schemaField.input.value)),
             identifierRules: parseIdentifierRules(rulesField.input.value)
           }
         });
@@ -1263,16 +1279,32 @@
         setMessage(error.message || String(error), true);
       }
     }));
-    actions.append(previewButton, inferSchemaButton, saveButton);
+
+    const deleteButton = document.createElement("button");
+    deleteButton.type = "button";
+    deleteButton.textContent = "Delete";
+    deleteButton.className = "danger";
+    deleteButton.addEventListener("click", safeAction(async () => {
+      if (deleteButton.dataset.confirm !== "true") {
+        deleteButton.dataset.confirm = "true";
+        deleteButton.textContent = "Confirm delete?";
+        setMessage(`Click "Confirm delete?" again to permanently remove Event Type '${eventType.name}' from Pipes.`, true);
+        return;
+      }
+      const response = await runtimeMessage({ type: "DELETE_PRISM_EVENT_TYPE", eventTypeId: eventType.id });
+      setMessage(response.ok ? `Deleted Event Type '${eventType.name}'.` : response.error, !response.ok);
+      await load();
+    }));
+    actions.append(previewButton, inferSchemaButton, saveButton, deleteButton);
     return article;
   }
 
   function recipeCard(recipe, selection) {
-    const article = document.createElement("article");
-    article.className = "item";
-    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><pre></pre>`;
-    article.querySelector(".item-title").textContent = recipe.name;
-    article.querySelector(".item-meta").textContent = recipe.description;
+    const article = itemCard({
+      body: "pre",
+      title: recipe.name,
+      meta: recipe.description
+    });
     article.querySelector("pre").textContent = JSON.stringify(recipe.rule, null, 2);
     const applyButton = document.createElement("button");
     applyButton.type = "button";
@@ -1293,18 +1325,33 @@
   function renderPipesControl() {
     const pipes = state.pipes || {};
     const nodes = [];
-    nodes.push(compactJsonCard("Connection", {
+    nodes.push(jsonCard("Connection", {
       ok: pipes.ok,
       base_url: pipes.base_url || null,
       source_slug: pipes.source_slug || null,
       source: pipes.source ? { id: pipes.source.id, name: pipes.source.name, slug: pipes.source.slug, enabled: pipes.source.isEnabled !== false } : null,
       event_types: Array.isArray(pipes.event_types) ? pipes.event_types.length : 0,
       identifier_types: Array.isArray(pipes.identifier_types) ? pipes.identifier_types.length : 0,
+      routing_pipes: Array.isArray(pipes.routing) ? pipes.routing.length : 0,
       error: pipes.error || null
     }));
 
     if (pipes.source && Array.isArray(pipes.event_types) && pipes.event_types.length) {
-      nodes.push(compactJsonCard("Resolved source Event Types", pipes.event_types.map((item) => item.name).sort()));
+      nodes.push(jsonCard("Resolved source Event Types", pipes.event_types.map((item) => item.name).sort()));
+    }
+
+    if (Array.isArray(pipes.identifier_types) && pipes.identifier_types.length) {
+      nodes.push(jsonCard(
+        "Identifier types (merge/overflow limits)",
+        pipes.identifier_types
+          .slice()
+          .sort((left, right) => (right.priority || 0) - (left.priority || 0))
+          .map((item) => ({
+            name: item.name,
+            maxIdentifiers: item.maxIdentifiers === null || item.maxIdentifiers === undefined ? "unlimited" : item.maxIdentifiers,
+            priority: item.priority === null || item.priority === undefined ? 0 : item.priority
+          }))
+      ));
     }
 
     renderStack(els.pipesControl, nodes, "Add a Prism token in Options to manage Pipes sources and Event Types.");
@@ -1326,6 +1373,10 @@
     if (document.activeElement !== els.sourceFunctionEditor) {
       els.sourceFunctionEditor.value = sourceDraftState.sourceFunctionCode || "";
     }
+
+    els.trackingRulesStatus.textContent = source && source.trackingRulesFetchError
+      ? `Could not load the source's current tracking rules from Pipes: ${source.trackingRulesFetchError}. Saving now would overwrite them.`
+      : "";
   }
 
   function renderSourceTest() {
@@ -1367,10 +1418,10 @@
       nodes.push(...result.events.map((event, index) => sourceTestEventCard(event, index, result.validation)));
     }
     if (summary.errors.length) {
-      nodes.push(compactJsonCard("Validation errors", summary.errors));
+      nodes.push(jsonCard("Validation errors", summary.errors));
     }
     if (Array.isArray(result.logs) && result.logs.length) {
-      nodes.push(compactJsonCard("Transform logs", result.logs));
+      nodes.push(jsonCard("Transform logs", result.logs));
     }
     renderStack(els.sourceTestInspector, nodes);
   }
@@ -1409,7 +1460,8 @@
     identifierTypes.forEach((item) => {
       const option = document.createElement("option");
       option.value = item.id;
-      option.textContent = item.name || item.id;
+      const limit = item.maxIdentifiers === null || item.maxIdentifiers === undefined ? "unlimited" : `max ${item.maxIdentifiers}`;
+      option.textContent = `${item.name || item.id} (${limit}, priority ${item.priority || 0})`;
       select.appendChild(option);
     });
     pathSuggestions.forEach((path) => {
@@ -1469,7 +1521,7 @@
   function previewEventTypeConfig(eventType, schemaText, rulesText, target) {
     target.textContent = "";
     try {
-      const schema = normalizeJsonSchemaTypes(parseNullableJson(schemaText));
+      const schema = shared.normalizeJsonSchemaTypes(parseNullableJson(schemaText));
       const rules = parseIdentifierRulesPreview(rulesText);
       const sample = samplePayloadForEventType(eventType.name);
       if (!sample) {
@@ -1494,8 +1546,8 @@
         kvBox("Schema", schemaErrors.length ? `${schemaErrors.length} issue(s)` : "pass"),
         kvBox("Identifiers", `${identifierResults.filter((item) => item.found).length}/${identifierResults.length} found`)
       ]));
-      target.appendChild(compactJsonCard("Schema validation", schemaErrors.length ? schemaErrors : ["Sample payload matches the configured schema checks."]));
-      target.appendChild(compactJsonCard("Identifier extraction", identifierResults.length ? identifierResults : ["No identifier rules configured."]));
+      target.appendChild(jsonCard("Schema validation", schemaErrors.length ? schemaErrors : ["Sample payload matches the configured schema checks."]));
+      target.appendChild(jsonCard("Identifier extraction", identifierResults.length ? identifierResults : ["No identifier rules configured."]));
     } catch (error) {
       target.appendChild(subtleBox(error.message || String(error)));
     }
@@ -1712,64 +1764,6 @@
     return JSON.stringify(value).slice(0, 240);
   }
 
-  function inferJsonSchemaFromSample(value) {
-    if (Array.isArray(value)) {
-      const firstDefined = value.find((item) => item !== undefined);
-      return {
-        type: "array",
-        items: firstDefined === undefined ? {} : inferJsonSchemaFromSample(firstDefined)
-      };
-    }
-    if (value && typeof value === "object") {
-      const properties = {};
-      Object.entries(value).forEach(([key, childValue]) => {
-        properties[key] = inferJsonSchemaFromSample(childValue);
-      });
-      return {
-        type: "object",
-        properties
-      };
-    }
-    if (typeof value === "number") {
-      return { type: Number.isInteger(value) ? "integer" : "number" };
-    }
-    if (typeof value === "boolean") {
-      return { type: "boolean" };
-    }
-    if (value === null) {
-      return { type: "null" };
-    }
-    return { type: "string" };
-  }
-
-  function normalizeJsonSchemaTypes(schema) {
-    if (schema === null || schema === undefined) {
-      return schema;
-    }
-    if (Array.isArray(schema)) {
-      return schema.map(normalizeJsonSchemaTypes);
-    }
-    if (!schema || typeof schema !== "object") {
-      return schema;
-    }
-    const normalized = {};
-    Object.entries(schema).forEach(([key, value]) => {
-      normalized[key] = key === "type" ? normalizeJsonSchemaTypeValue(value) : normalizeJsonSchemaTypes(value);
-    });
-    return normalized;
-  }
-
-  function normalizeJsonSchemaTypeValue(value) {
-    if (Array.isArray(value)) {
-      return value.map(normalizeJsonSchemaTypeValue);
-    }
-    if (!value) {
-      return value;
-    }
-    const type = String(value).toLowerCase();
-    return ["integer", "number", "string", "boolean", "object", "array", "null"].includes(type) ? type : value;
-  }
-
   function summaryPreviewCard(title, nodes) {
     const article = document.createElement("article");
     article.className = "card";
@@ -1781,8 +1775,12 @@
   }
 
   function buildTrackingRulesCode(rules) {
+    // Only on.click(...) is generated because the local selector-rule engine
+    // (content-script.js evaluateSelectorRules) only ever evaluates click
+    // events; generating on.formSubmit/on.input/on.dataLayer here would claim
+    // coverage the local rules don't actually provide.
     const lines = [
-      "function configure(sdk, on) {"
+      "function configure(sdk, on, runtime) {"
     ];
     rules.forEach((rule) => {
       const selector = JSON.stringify(rule.selector);
@@ -1797,10 +1795,6 @@
     });
     lines.push("}");
     return lines.join("\n");
-  }
-
-  function compactJsonCard(title, value) {
-    return jsonCard(title, value);
   }
 
   function jsonCard(title, value) {
@@ -1842,7 +1836,7 @@
     }
 
     const diff = shared.diffEvents(left.payload, right.payload);
-    els.diffSummary.textContent = `${left.event_type} (${left.timestamp}) vs ${right.event_type} (${right.timestamp}) · ${diff.length} differing path(s)`;
+    els.diffSummary.textContent = `${left.event_type} (${shared.formatTimestamp(left.timestamp)}) vs ${right.event_type} (${shared.formatTimestamp(right.timestamp)}) · ${diff.length} differing path(s)`;
     renderStack(els.diffList, diff.map((item) => diffCard(item)));
   }
 
@@ -1851,7 +1845,7 @@
     logs.forEach((entry) => {
       const option = document.createElement("option");
       option.value = entry.id;
-      option.textContent = `${entry.event_type} · ${entry.timestamp}`;
+      option.textContent = `${entry.event_type} · ${shared.formatTimestamp(entry.timestamp)}`;
       option.selected = entry.id === selectedId;
       select.appendChild(option);
     });
@@ -1948,6 +1942,24 @@
     span.className = `pill ${tone || ""}`.trim();
     span.textContent = label;
     return span;
+  }
+
+  function itemCard(options) {
+    const opts = options || {};
+    const article = document.createElement("article");
+    article.className = opts.className || "item";
+    if (opts.detailKey) {
+      article.dataset.detailKey = opts.detailKey;
+    }
+    const bodyMarkup = opts.body === "pre" ? "<pre></pre>" : (opts.body === "kv" ? '<div class="kv"></div>' : '<div class="item-body"></div>');
+    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div>${bodyMarkup}`;
+    if (opts.title !== undefined) {
+      article.querySelector(".item-title").textContent = opts.title;
+    }
+    if (opts.meta !== undefined) {
+      article.querySelector(".item-meta").textContent = opts.meta;
+    }
+    return article;
   }
 
   function downloadJson(filename, data) {
@@ -2104,6 +2116,33 @@
     return (pipes.event_types || []).some((item) => item.name === eventType);
   }
 
+  async function syncPipesEventType(eventType, payload, actionResultKey) {
+    setPipesActionResult(actionResultKey, { status: "pending", label: "Syncing Pipes definition and verifying source output." });
+    renderValidation();
+    const response = await runtimeMessage({
+      type: "SYNC_PRISM_EVENT_TYPE_FROM_EVENT",
+      eventType,
+      payload,
+      verify: true
+    });
+    if (response.ok) {
+      setPipesActionResult(actionResultKey, {
+        status: response.verification && response.verification.ok ? "ok" : "error",
+        label: `${pipesSyncMessage(eventType, response)} ${pipesVerificationMessage(response.verification)}`,
+        detail: {
+          action: response.action,
+          inferred: response.inferred,
+          verification: response.verification || null
+        }
+      });
+      setMessage(`${pipesSyncMessage(eventType, response)} ${pipesVerificationMessage(response.verification)}`);
+    } else {
+      setPipesActionResult(actionResultKey, { status: "error", label: response.error });
+      setMessage(response.error, true);
+    }
+    await load();
+  }
+
   function pipesSyncMessage(eventType, response) {
     const sourceName = response.source && response.source.name ? response.source.name : "the resolved source";
     const inferred = response.inferred || {};
@@ -2132,16 +2171,16 @@
     if (!result) {
       return;
     }
-    const article = document.createElement("article");
-    article.className = "item action-result";
-    article.innerHTML = `<div class="item-head"><div><div class="item-title"></div><div class="item-meta"></div></div><div class="inline-buttons"></div></div><div class="item-body"></div>`;
-    article.querySelector(".item-title").textContent = result.status === "pending" ? "Pipes action running" : "Pipes action result";
-    article.querySelector(".item-meta").textContent = result.updated_at || "";
+    const article = itemCard({
+      className: "item action-result",
+      title: result.status === "pending" ? "Pipes action running" : "Pipes action result",
+      meta: result.updated_at ? shared.formatTimestamp(result.updated_at) : ""
+    });
     article.querySelector(".inline-buttons").appendChild(pill(result.status === "ok" ? "PASS" : (result.status === "pending" ? "RUNNING" : "CHECK"), result.status === "ok" ? "good" : (result.status === "pending" ? "warn" : "bad")));
     const body = article.querySelector(".item-body");
     body.appendChild(subtleBox(result.label || "No result details."));
     if (result.detail) {
-      body.appendChild(compactJsonCard("Details", result.detail));
+      body.appendChild(jsonCard("Details", result.detail));
     }
     target.appendChild(article);
   }

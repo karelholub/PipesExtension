@@ -21,6 +21,11 @@
     capture_outbound_clicks: document.getElementById("captureOutboundClicks"),
     capture_file_downloads: document.getElementById("captureFileDownloads")
   };
+  const consentFields = {
+    storage_persistence: document.getElementById("consentStoragePersistence"),
+    user_id: document.getElementById("consentUserId"),
+    session_id: document.getElementById("consentSessionId")
+  };
 
   const [settingsResponse, prismResponse] = await Promise.all([
     chrome.runtime.sendMessage({ type: "GET_SETTINGS" }),
@@ -101,6 +106,11 @@
 
     fields.prism_base_url.value = prismConnection && prismConnection.base_url ? prismConnection.base_url : "";
     fields.prism_token.value = prismConnection && prismConnection.token ? prismConnection.token : "";
+
+    const consent = shared.mergeSettings(settings).consent || {};
+    consentFields.storage_persistence.value = consent.storage_persistence || "granted";
+    consentFields.user_id.value = consent.user_id || "granted";
+    consentFields.session_id.value = consent.session_id || "granted";
   }
 
   function readForm() {
@@ -117,7 +127,12 @@
       enable_web_layers: fields.enable_web_layers.checked,
       capture_scroll_depth: fields.capture_scroll_depth.checked,
       capture_outbound_clicks: fields.capture_outbound_clicks.checked,
-      capture_file_downloads: fields.capture_file_downloads.checked
+      capture_file_downloads: fields.capture_file_downloads.checked,
+      consent: {
+        storage_persistence: consentFields.storage_persistence.value,
+        user_id: consentFields.user_id.value,
+        session_id: consentFields.session_id.value
+      }
     };
   }
 
